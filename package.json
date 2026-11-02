@@ -1,0 +1,27 @@
+{
+  "name": "hairpin-guard-ai",
+  "version": "1.0.0",
+  "description": "YOLO-Based Hairpin Bend Traffic Monitoring & Predictive Accident Prevention System",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "server": "node server.js",
+    "backend": "python backend_service.py",
+    "test": "pytest tests/ -v"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "multer": "^1.4.5-lts.1"
+  },
+  "keywords": [
+    "yolov8",
+    "traffic-safety",
+    "hairpin-bend",
+    "accident-prevention",
+    "collision-prediction",
+    "computer-vision"
+  ],
+  "author": "Antigravity AI",
+  "license": "ISC"
+}

@@ -1,0 +1,83 @@
+# YOLO-Based Hairpin Bend Traffic Monitoring Configuration
+
+video:
+  source: "synthetic"  # "synthetic", webcam index (e.g., 0), or path to video file
+  width: 1280
+  height: 720
+  fps: 30
+
+model:
+  weights: "yolov8n.pt"
+  confidence: 0.35
+  iou_threshold: 0.45
+  # Target COCO classes: 2: car, 3: motorcycle, 5: bus, 7: truck
+  target_classes: [2, 3, 5, 7]
+  device: "cpu"  # "cuda" or "cpu"
+
+preprocessing:
+  enable_clahe: true
+  clahe_clip_limit: 2.5
+  clahe_grid_size: [8, 8]
+  enable_roi_mask: false
+
+# Hairpin Bend Spatial Zones (Normalized coordinates [x, y] in range 0.0 - 1.0)
+# Scaled automatically to current video resolution
+zones:
+  # Arm A: Approach 1 (e.g., Uphill / Left Arm approaching curve)
+  zone_a:
+    name: "Arm A (Uphill Approach)"
+    polygon:
+      - [0.05, 0.95]
+      - [0.38, 0.95]
+      - [0.38, 0.45]
+      - [0.15, 0.45]
+
+  # Arm B: Approach 2 (e.g., Downhill / Right Arm approaching curve)
+  zone_b:
+    name: "Arm B (Downhill Approach)"
+    polygon:
+      - [0.62, 0.95]
+      - [0.95, 0.95]
+      - [0.85, 0.45]
+      - [0.62, 0.45]
+
+  # Conflict Zone: The blind hairpin apex / narrow bottleneck curve
+  conflict_zone:
+    name: "Blind Curve Conflict Apex"
+    polygon:
+      - [0.18, 0.45]
+      - [0.82, 0.45]
+      - [0.75, 0.15]
+      - [0.25, 0.15]
+
+tracking:
+  tracker_type: "bytetrack.yaml"
+  track_history_length: 30
+  min_displacement_px: 5.0
+  pixels_per_meter: 18.0  # Approximated scale for metric speed estimation
+
+risk_assessment:
+  # Time-to-Conflict (seconds)
+  ttc_critical_threshold: 3.0
+  ttc_warning_threshold: 6.0
+  ttc_caution_threshold: 10.0
+  # Hazard weight multipliers for wide/heavy turning radius
+  hazard_weights:
+    bus: 1.5
+    truck: 1.5
+    car: 1.0
+    motorcycle: 1.0
+
+alert_system:
+  audio_alert: true
+  buzzer_frequency_hz: 1200
+  buzzer_duration_ms: 180
+  audio_cooldown_seconds: 1.5
+  save_snapshots: true
+  snapshot_min_risk_level: 2  # 2: Warning, 3: Critical
+
+storage:
+  database_path: "data/logs/hairpin_events.db"
+  csv_log_path: "data/logs/traffic_events.csv"
+  snapshots_dir: "data/snapshots"
+  sample_videos_dir: "data/sample_videos"

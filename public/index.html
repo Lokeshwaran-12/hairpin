@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hairpin Bend Traffic Monitoring & Accident Prevention</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-layout">
+        <!-- ================= LEFT SIDEBAR ================= -->
+        <aside class="sidebar">
+            <div class="sidebar-brand">
+                <div class="brand-icon">
+                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <polygon points="12 2 2 7 12 12 22 7 12 2"></polygon>
+                        <polyline points="2 17 12 22 22 17"></polyline>
+                        <polyline points="2 12 12 17 22 12"></polyline>
+                    </svg>
+                </div>
+                <div class="brand-text">
+                    <h2>Hairpin Guard AI</h2>
+                    <p>Accident Prevention System</p>
+                </div>
+            </div>
+
+            <!-- Navigation Menu -->
+            <nav class="sidebar-nav">
+                <button class="nav-item active" id="tab-image-btn">
+                    <span class="nav-icon">📷</span>
+                    <span class="nav-label">Image Detection</span>
+                </button>
+                <button class="nav-item" id="tab-video-btn">
+                    <span class="nav-icon">🎥</span>
+                    <span class="nav-label">Live Video Stream</span>
+                </button>
+                <button class="nav-item" id="tab-logs-btn">
+                    <span class="nav-icon">📋</span>
+                    <span class="nav-label">Incident Event Logs</span>
+                </button>
+            </nav>
+
+            <!-- Sidebar Footer System Info -->
+            <div class="sidebar-footer">
+                <div class="system-status-badge">
+                    <span class="pulse-indicator"></span>
+                    <span class="status-title">AI Engine: Online</span>
+                </div>
+                <div class="system-spec">
+                    <div>Model: <strong>YOLOv8n (COCO)</strong></div>
+                    <div>Tracking: <strong>ByteTrack (Kalman)</strong></div>
+                    <div>Zones: <strong>Arm A / Arm B / Apex</strong></div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- ================= MAIN CONTENT AREA ================= -->
+        <main class="main-content">
+            
+            <!-- ================= 1. IMAGE DETECTION SECTION ================= -->
+            <section id="section-image" class="content-view active">
+                <div class="view-header">
+                    <div>
+                        <h1>Vehicle Detection & Bounding Box Analyzer</h1>
+                        <p class="view-subtitle">Upload roadside camera images to detect vehicles, analyze curve geometry, and calculate collision risks.</p>
+                    </div>
+                </div>
+
+                <!-- Action Toolbar Card -->
+                <div class="card toolbar-card">
+                    <div class="toolbar-row">
+                        <div class="actions-left">
+                            <label for="image-upload" class="btn btn-primary btn-lg">
+                                <span class="btn-icon">📁</span> Upload Image
+                            </label>
+                            <input type="file" id="image-upload" accept="image/*" style="display: none;">
+                            
+                            <button class="btn btn-secondary btn-lg" id="btn-use-sample">
+                                <span class="btn-icon">📸</span> Use Sample (images.jpeg)
+                            </button>
+                            
+                            <span class="file-badge-lg" id="selected-file-name">images.jpeg (loaded)</span>
+                        </div>
+
+                        <div class="actions-right">
+                            <div class="control-unit">
+                                <label for="conf-slider">Confidence Threshold: <strong id="conf-val">25%</strong></label>
+                                <input type="range" id="conf-slider" min="10" max="90" step="5" value="25">
+                            </div>
+
+                            <div class="control-unit">
+                                <label for="view-style-select">Display Mode:</label>
+                                <select id="view-style-select" class="select-box-lg">
+                                    <option value="boxes" selected>Bounding Boxes Only</option>
+                                    <option value="hud">Full Safety HUD</option>
+                                    <option value="original">Original Image</option>
+                                </select>
+                            </div>
+
+                            <button class="btn btn-outline btn-lg" id="btn-download" disabled>
+                                💾 Download
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 4 High-Visibility Status Cards -->
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-header">TOTAL VEHICLES DETECTED</div>
+                        <div class="metric-value text-blue" id="val-total-count">0</div>
+                        <div class="metric-detail" id="val-breakdown">Awaiting image</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">COLLISION RISK LEVEL</div>
+                        <div class="risk-pill-lg pill-green" id="val-risk-level">LEVEL 0 - SAFE</div>
+                        <div class="metric-detail" id="val-ttc">TTC: --</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">SIGNAL A (UPHILL APPROACH)</div>
+                        <div class="signal-indicator-box">
+                            <span class="signal-dot-lg dot-green" id="signal-a-light"></span>
+                            <span class="signal-text-lg" id="signal-a-text">CLEAR</span>
+                        </div>
+                        <div class="metric-detail" id="signal-a-desc">Proceed with caution</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">SIGNAL B (DOWNHILL APPROACH)</div>
+                        <div class="signal-indicator-box">
+                            <span class="signal-dot-lg dot-green" id="signal-b-light"></span>
+                            <span class="signal-text-lg" id="signal-b-text">CLEAR</span>
+                        </div>
+                        <div class="metric-detail" id="signal-b-desc">Proceed with caution</div>
+                    </div>
+                </div>
+
+                <!-- Main Detected Image Stage with Animated Scanning Effect -->
+                <div class="card canvas-card">
+                    <div class="canvas-header">
+                        <h2>Vehicle Bounding Box Output</h2>
+                        <span class="status-tag" id="image-badge">Detecting...</span>
+                    </div>
+
+                    <div class="stage-wrapper" id="image-stage-wrapper">
+                        <!-- Output Image -->
+                        <img id="main-detected-image" alt="YOLOv8 Detection Output" src="">
+
+                        <!-- Scanning Effect Overlay (Triggered upon upload) -->
+                        <div class="scan-overlay" id="scan-overlay" style="display: none;">
+                            <div class="scan-laser"></div>
+                            <div class="scan-hud-banner">
+                                <div class="scan-spinner-ring"></div>
+                                <div class="scan-hud-text">
+                                    <div class="scan-main-msg">⚡ SCANNING IMAGE FORMAT</div>
+                                    <div class="scan-sub-msg">Executing YOLOv8n Neural Vehicle Localization...</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Detected Vehicles Table -->
+                <div class="card table-card">
+                    <div class="canvas-header">
+                        <h2>Detected Vehicles & Coordinate Telemetry</h2>
+                    </div>
+                    <div class="table-scroll">
+                        <table class="styled-table">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Vehicle Class</th>
+                                    <th>Confidence</th>
+                                    <th>Bounding Box [x1, y1, x2, y2]</th>
+                                    <th>Pixel Dimensions</th>
+                                    <th>Centroid (cx, cy)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-results-body">
+                                <tr>
+                                    <td colspan="6" class="text-center text-muted">No vehicle detections available.</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ================= 2. LIVE VIDEO DETECTION SECTION ================= -->
+            <section id="section-video" class="content-view">
+                <div class="view-header">
+                    <div>
+                        <h1>Live Video Stream & Real-Time Detection</h1>
+                        <p class="view-subtitle">Upload any road traffic video file to run live YOLOv8n detection, object tracking, and collision prevention in real time.</p>
+                    </div>
+                </div>
+
+                <!-- Video Upload Toolbar -->
+                <div class="card toolbar-card">
+                    <div class="toolbar-row">
+                        <div class="actions-left">
+                            <label for="video-upload-input" class="btn btn-primary btn-lg">
+                                <span class="btn-icon">📹</span> Upload Video File (.mp4, .avi, .mov)
+                            </label>
+                            <input type="file" id="video-upload-input" accept="video/*" style="display: none;">
+
+                            <button class="btn btn-secondary btn-lg" id="btn-synthetic-mode">
+                                <span class="btn-icon">🔄</span> Curve Simulation
+                            </button>
+
+                            <span class="file-badge-lg" id="video-active-badge">Active: Simulation Highway Curve</span>
+                        </div>
+
+                        <div class="actions-right">
+                            <button class="btn btn-outline btn-lg" id="btn-refresh-stream">
+                                🔁 Reload Stream
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Centric Line (Virtual Trigger Line) Calibration & Crossings Toolbar -->
+                <div class="card toolbar-card centric-toolbar-card">
+                    <div class="toolbar-row">
+                        <div class="actions-left">
+                            <button class="btn btn-primary btn-lg" id="btn-toggle-centric">
+                                <span class="btn-icon">📏</span> Centric Detection Line: ON
+                            </button>
+
+                            <button class="btn btn-secondary btn-lg" id="btn-toggle-left-lane">
+                                <span class="btn-icon">🎯</span> Left Lane Mode: ALL LANES
+                            </button>
+
+                            <div class="control-unit">
+                                <label for="centric-line-slider">Centric Line Position (Y-Axis): <strong id="centric-pos-val">52%</strong></label>
+                                <input type="range" id="centric-line-slider" min="20" max="80" step="2" value="52">
+                            </div>
+
+                            <button class="btn btn-outline btn-lg" id="btn-reset-centric">
+                                🔄 Reset Line Counters
+                            </button>
+                        </div>
+
+                        <div class="actions-right">
+                            <span class="file-badge-lg" id="centric-status-badge">Centric Line Active • Marking Vehicles on Crossing</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Emergency Red Alert Banner for Left Passing Vehicles -->
+                <div id="video-red-alert-banner" class="emergency-alert-banner" style="display: none;">
+                    <span class="alert-icon-pulse">🚨</span>
+                    <div class="alert-text-group">
+                        <strong class="alert-title">CRITICAL RED ALERT: LEFT PASSING CAR ON CENTRIC LINE!</strong>
+                        <span class="alert-desc" id="red-alert-banner-desc">Vehicle detected crossing centric trigger line in LEFT LANE. Potential overtaking / collision hazard!</span>
+                    </div>
+                </div>
+
+                <!-- Centric Line Live Passing Metrics Grid -->
+                <div class="metrics-grid centric-metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-header">TOTAL VEHICLES PASSED LINE</div>
+                        <div class="metric-value text-blue" id="centric-total-crossings">0</div>
+                        <div class="metric-detail" id="centric-detail-status">Crossings verified</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">UPHILL PASSED (ARM A)</div>
+                        <div class="metric-value text-green" id="centric-uphill-crossings">0</div>
+                        <div class="metric-detail">Ascending hairpin road</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">DOWNHILL PASSED (ARM B)</div>
+                        <div class="metric-value text-orange" id="centric-downhill-crossings">0</div>
+                        <div class="metric-detail">Descending toward curve</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">LEFT PASSING (RED ALERT)</div>
+                        <div class="metric-value text-red" id="centric-left-crossings">0</div>
+                        <div class="metric-detail" id="centric-left-status">Safe (0 Left Passing)</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">VEHICLES CROSSING NOW</div>
+                        <div class="metric-value text-purple" id="centric-active-touching">0</div>
+                        <div class="metric-detail">Active on centric line</div>
+                    </div>
+                </div>
+
+                <!-- Live Stream Video Stage -->
+                <div class="card canvas-card">
+                    <div class="canvas-header">
+                        <h2>Live Detection Feed (Visible Bounding Boxes & HUD Signals)</h2>
+                        <span class="status-tag tag-live" id="stream-live-tag">● LIVE DETECTION ACTIVE</span>
+                    </div>
+
+                    <div class="stage-wrapper video-stage-wrapper">
+                        <img id="live-stream-player" src="/api/stream/feed" alt="Live Camera / Video Stream with Bounding Boxes">
+                    </div>
+                </div>
+
+                <!-- Live Video Telemetry Cards -->
+                <div class="metrics-grid">
+                    <div class="metric-card">
+                        <div class="metric-header">ACTIVE VEHICLES IN FRAME</div>
+                        <div class="metric-value text-blue" id="stream-val-total">0</div>
+                        <div class="metric-detail" id="stream-val-breakdown">Tracking active</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">INSTANTANEOUS RISK LEVEL</div>
+                        <div class="risk-pill-lg pill-green" id="stream-val-risk">LEVEL 0 - SAFE</div>
+                        <div class="metric-detail" id="stream-val-ttc">Clearance verified</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">SIGNAL A (UPHILL)</div>
+                        <div class="signal-indicator-box">
+                            <span class="signal-dot-lg dot-green" id="stream-signal-a-light"></span>
+                            <span class="signal-text-lg" id="stream-signal-a-text">CLEAR</span>
+                        </div>
+                        <div class="metric-detail" id="stream-signal-a-desc">Proceed</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">SIGNAL B (DOWNHILL)</div>
+                        <div class="signal-indicator-box">
+                            <span class="signal-dot-lg dot-green" id="stream-signal-b-light"></span>
+                            <span class="signal-text-lg" id="stream-signal-b-text">CLEAR</span>
+                        </div>
+                        <div class="metric-detail" id="stream-signal-b-desc">Proceed</div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ================= 3. INCIDENT EVENT LOGS SECTION ================= -->
+            <section id="section-logs" class="content-view">
+                <div class="view-header">
+                    <div>
+                        <h1>Incident Event Logs & Safety Archival</h1>
+                        <p class="view-subtitle">Automatic audit trail capturing timestamps, risk escalations, and vehicle trajectories for safety compliance.</p>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="canvas-header">
+                        <h2>Recorded Traffic Events (SQLite Database)</h2>
+                        <button class="btn btn-secondary btn-lg" id="btn-reload-logs">
+                            🔄 Refresh Logs
+                        </button>
+                    </div>
+
+                    <div class="table-scroll">
+                        <table class="styled-table">
+                            <thead>
+                                <tr>
+                                    <th>Timestamp</th>
+                                    <th>Risk Level</th>
+                                    <th>Min TTC</th>
+                                    <th>Vehicles</th>
+                                    <th>Target Classes</th>
+                                    <th>Signal A</th>
+                                    <th>Signal B</th>
+                                    <th>Hazard Summary</th>
+                                </tr>
+                            </thead>
+                            <tbody id="table-logs-body">
+                                <tr>
+                                    <td colspan="8" class="text-center text-muted">Loading incident records...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

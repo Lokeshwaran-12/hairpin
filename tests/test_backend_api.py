@@ -1,0 +1,108 @@
+"""
+Tests for FastAPI Backend Service Endpoints (/api/health, /api/sample, /api/detect, /api/video).
+"""
+import os
+import cv2
+import base64
+import pytest
+import backend_service
+
+
+def test_api_health_endpoint():
+    result = backend_service.health()
+    assert result["status"] == "healthy"
+    assert result["model"] == "yolov8n.pt"
+    assert "car" in result["target_classes"]
+
+
+def test_api_sample_endpoint():
+    sample_path = "data/sample_videos/images.jpeg"
+    if not os.path.exists(sample_path):
+        pytest.skip(f"{sample_path} not found")
+
+    result = backend_service.get_sample_info()
+    assert result["filename"] == "images.jpeg"
+    assert result["width"] > 0
+    assert result["height"] > 0
+    assert result["image"].startswith("data:image/jpeg;base64,")
+
+
+def test_api_detect_endpoint_json():
+    sample_path = "data/sample_videos/images.jpeg"
+    if not os.path.exists(sample_path):
+        pytest.skip(f"{sample_path} not found")
+
+    with open(sample_path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("utf-8")
+
+    payload = backend_service.DetectPayload(
+        image=f"data:image/jpeg;base64,{b64}",
+        confidence=0.25,
+        iou=0.45,
+        classes="car,motorcycle,bus,truck"
+    )
+
+    res = backend_service.detect_image(payload)
+    assert res["success"] is True
+    assert res["summary"]["total"] >= 5
+    assert len(res["detections"]) == res["summary"]["total"]
+    assert "boxes_only" in res["images"]
+    assert "full_hud" in res["images"]
+    assert "original" in res["images"]
+    assert res["risk_assessment"]["label"] in ["SAFE", "CAUTION", "WARNING", "CRITICAL"]
+    assert res["risk_assessment"]["signal_a_state"] in ["GREEN", "YELLOW", "RED"]
+    assert res["risk_assessment"]["signal_b_state"] in ["GREEN", "YELLOW", "RED"]
+
+
+def test_api_detect_fallback():
+    # Test fallback to sample image when payload is None
+    res = backend_service.detect_image(None)
+    assert res["success"] is True
+    assert res["summary"]["total"] >= 5
+
+
+def test_api_video_status():
+    status = backend_service.get_video_status()
+    assert "video_name" in status
+    assert "is_custom_video" in status
+
+
+def test_api_video_set_source_synthetic():
+    req = backend_service.StreamSwitchRequest(source="synthetic")
+    res = backend_service.switch_stream(req)
+    assert res["status"] == "switched"
+    assert res["source"] == "synthetic"
+
+
+def test_api_centric_line_config_and_reset():
+    cfg = backend_service.CentricLineConfig(enabled=True, y_ratio=0.55)
+    res = backend_service.configure_centric_line(cfg)
+    assert res["success"] is True
+    assert res["enabled"] is True
+    assert abs(res["y_ratio"] - 0.55) < 1e-4
+
+    res_reset = backend_service.reset_centric_line()
+    assert res_reset["success"] is True
+    assert res_reset["total_crossings"] == 0
+    assert res_reset["left_lane_crossings"] == 0
+
+
+def test_api_left_lane_mode_config():
+    req = backend_service.LeftLaneModeConfig(enabled=True)
+    res = backend_service.configure_left_lane_mode(req)
+    assert res["success"] is True
+    assert res["filter_left_lane_only"] is True
+
+    # Reset back to False
+    req_off = backend_service.LeftLaneModeConfig(enabled=False)
+    res_off = backend_service.configure_left_lane_mode(req_off)
+    assert res_off["filter_left_lane_only"] is False
+
+
+def test_api_left_lane_passing_telemetry():
+    telemetry = backend_service.stream_telemetry()
+    assert "centric_line" in telemetry
+    cl = telemetry["centric_line"]
+    assert "left_lane_crossings" in cl
+    assert "filter_left_lane_only" in cl
+    assert "red_alert" in cl

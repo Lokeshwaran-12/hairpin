@@ -1,0 +1,47 @@
+# Virtual environments & Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv/
+.pytest_cache/
+.coverage
+htmlcov/
+.ultralytics/
+
+# Node.js dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# YOLO weights & model checkpoints (large binaries)
+*.pt
+*.onnx
+*.engine
+
+# Dynamic Runtime Data & Large Video Files
+data/uploaded_videos/
+data/snapshots/incident_*.jpg
+data/snapshots/*.png
+data/logs/*.db
+data/logs/*.csv
+data/sample_videos/*.mp4
+
+# Preserve tracked samples
+!data/sample_videos/images.jpeg
+!data/sample_videos/images (1).jpeg
+!data/logs/.gitkeep
+!data/snapshots/.gitkeep
+!data/sample_videos/.gitkeep
+
+# IDEs & System files
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
