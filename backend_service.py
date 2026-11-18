@@ -337,10 +337,10 @@ def detect_image(payload: Optional[DetectPayload] = None):
     detections = detector_model.detect(proc_img)
 
     # Class summary
-    summary = {"total": len(detections), "car": 0, "truck": 0, "bus": 0, "motorcycle": 0}
+    summary = {"total": len(detections), "car": 0, "truck": 0, "bus": 0, "motorcycle": 0, "ambulance": 0}
     for d in detections:
-        if d.class_name in summary:
-            summary[d.class_name] += 1
+        name = d.class_name if d.class_name in summary else "car"
+        summary[name] += 1
 
     # Render clean bounding boxes
     box_img = YOLODetector.draw_bounding_boxes(
@@ -387,7 +387,9 @@ def detect_image(payload: Optional[DetectPayload] = None):
             cross_direction="FORWARD" if has_crossed else "APPROACHING",
             is_heavy_vehicle=is_heavy,
             is_left_lane=is_left,
-            is_left_passing=is_left_passing
+            is_left_passing=is_left_passing,
+            is_emergency=d.is_emergency,
+            emergency_type=d.emergency_type
         ))
 
     assessment = predictor.evaluate(tracked_v, (std_h, std_w))
@@ -510,7 +512,9 @@ def stream_telemetry():
             "speed_kmh": v.speed_kmh,
             "zone": v.current_zone,
             "direction": v.direction_status,
-            "confidence": round(v.confidence * 100, 1)
+            "confidence": round(v.confidence * 100, 1),
+            "is_emergency": getattr(v, "is_emergency", False),
+            "emergency_type": getattr(v, "emergency_type", None)
         })
 
     centric_data = {

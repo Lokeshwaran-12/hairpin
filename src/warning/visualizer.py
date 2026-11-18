@@ -23,6 +23,7 @@ class HUDVisualizer:
             "motorcycle": (220, 80, 220),   # Magenta
             "bus": (30, 215, 255),          # Bright yellow
             "truck": (50, 100, 240),        # Orange
+            "ambulance": (0, 0, 255),       # Emergency Red
         }
 
         # Risk colors (BGR)
@@ -72,14 +73,12 @@ class HUDVisualizer:
             is_touching = getattr(v, "is_touching_line", False)
             is_heavy = (v.class_name in ["truck", "bus"] or getattr(v, "is_heavy_vehicle", False))
             is_left_passing = getattr(v, "is_left_passing", False)
+            is_emergency = getattr(v, "is_emergency", False) or v.class_name == "ambulance"
 
-            # High-visibility color scheme:
-            # - Left-passing vehicle across centric line: Critical Red Alert (0, 0, 255)
-            # - In conflict: Danger Red (30, 30, 240)
-            # - Crossed centric line / touching line: Vibrant Line-Verification Green (0, 240, 110)
-            # - Heavy vehicle (Truck / Bus): Vibrant Orange/Amber (0, 140, 255)
-            # - Approaching car / motorcycle: Class color
-            if is_left_passing:
+            # High-visibility color scheme (priority: emergency > left-passing > conflict > crossed > heavy > class)
+            if is_emergency:
+                color = (0, 0, 255)  # Emergency Red
+            elif is_left_passing:
                 color = (0, 0, 255)  # Critical Red Alert for left passing car
             elif is_in_conflict:
                 color = (30, 30, 240)
@@ -109,12 +108,15 @@ class HUDVisualizer:
                     ay = int(cy + (vy / norm) * arrow_len)
                     cv2.arrowedLine(frame, (cx, cy), (ax, ay), (0, 255, 255), 2, tipLength=0.35)
 
-            # Bounding box (prominently marked with 4px border for left passing / heavy trucks / line passing)
-            thickness = 4 if (is_left_passing or is_heavy or is_in_conflict or has_crossed or is_touching) else 2
+            # Bounding box (prominently marked with 4px border for emergency / left passing / heavy trucks / line passing)
+            thickness = 4 if (is_emergency or is_left_passing or is_heavy or is_in_conflict or has_crossed or is_touching) else 2
             cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
 
-            # Double-border highlight for left passing, crossed line or heavy trucks
-            if is_left_passing:
+            # Double-border highlight (priority: emergency > left passing > crossed > heavy)
+            if is_emergency:
+                cv2.rectangle(frame, (x1 - 3, y1 - 3), (x2 + 3, y2 + 3), (255, 255, 255), 2)
+                cv2.rectangle(frame, (x1 - 6, y1 - 6), (x2 + 6, y2 + 6), (0, 0, 200), 1)
+            elif is_left_passing:
                 cv2.rectangle(frame, (x1 - 3, y1 - 3), (x2 + 3, y2 + 3), (255, 255, 255), 2)
             elif has_crossed or is_touching:
                 cv2.rectangle(frame, (x1 - 2, y1 - 2), (x2 + 2, y2 + 2), (255, 255, 255), 1)
@@ -122,7 +124,13 @@ class HUDVisualizer:
                 cv2.rectangle(frame, (x1 - 2, y1 - 2), (x2 + 2, y2 + 2), (0, 200, 255), 1)
 
             # Label badge
-            if is_left_passing:
+            badge_color = color
+            badge_text_color = (0, 0, 0)
+            if is_emergency:
+                badge_color = (0, 0, 200)
+                badge_text_color = (255, 255, 255)
+                label_text = f"[AMBULANCE] ID:{v.track_id} {v.speed_kmh}km/h"
+            elif is_left_passing:
                 dir_txt = f"{v.cross_direction}" if v.cross_direction else "PASSING"
                 label_text = f"[RED ALERT | LEFT {dir_txt}] ID:{v.track_id} {v.class_name.upper()} {v.speed_kmh}km/h"
             elif has_crossed:
@@ -139,9 +147,9 @@ class HUDVisualizer:
 
             (tw, th), baseline = cv2.getTextSize(label_text, cv2.FONT_HERSHEY_SIMPLEX, 0.44, 1)
             badge_y1 = max(18, y1 - th - 8)
-            cv2.rectangle(frame, (x1, badge_y1), (x1 + tw + 8, badge_y1 + th + 6), color, -1)
+            cv2.rectangle(frame, (x1, badge_y1), (x1 + tw + 8, badge_y1 + th + 6), badge_color, -1)
             cv2.putText(frame, label_text, (x1 + 4, badge_y1 + th + 2),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.44, (0, 0, 0), 1, cv2.LINE_AA)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.44, badge_text_color, 1, cv2.LINE_AA)
 
             # Direction status tag below box
             status_text = f"{v.direction_status} ({v.current_zone})"

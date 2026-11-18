@@ -16,7 +16,7 @@ os.environ["YOLO_CONFIG_DIR"] = os.path.join(tempfile.gettempdir(), "ultralytics
 os.makedirs(os.environ["YOLO_CONFIG_DIR"], exist_ok=True)
 
 from ultralytics import YOLO
-from src.detection.yolo_detector import Detection
+from src.detection.yolo_detector import YOLODetector, Detection
 
 
 @dataclass
@@ -40,6 +40,8 @@ class TrackedVehicle:
     is_heavy_vehicle: bool = False
     is_left_lane: bool = False
     is_left_passing: bool = False
+    is_emergency: bool = False
+    emergency_type: Optional[str] = None
 
 
 def _get_custom_tracker_config() -> str:
@@ -112,6 +114,8 @@ class VehicleTracker:
         # Fallback track IDs for detections before ByteTrack track confirmation
         self._next_fallback_id = 500
         self._fallback_tracks: Dict[int, Tuple[int, int, int, int]] = {}
+        # Emergency vehicle track cache: once confirmed ambulance, persist across frames
+        self.emergency_tracks: Dict[int, str] = {}  # track_id -> emergency_type
 
     def _match_or_create_fallback_id(self, x1: int, y1: int, x2: int, y2: int) -> int:
         """Associates unconfirmed detection with active fallback track or creates a new ID."""
@@ -242,6 +246,28 @@ class VehicleTracker:
                 self.speed_histories[track_id].append(raw_kmh)
                 instant_speed_kmh = float(np.mean(self.speed_histories[track_id]))
 
+            # Emergency Vehicle Detection: check ROI heuristic or use persisted cache
+            is_emergency = False
+            emergency_type_val: Optional[str] = None
+
+            if track_id in self.emergency_tracks:
+                # Already confirmed emergency in a previous frame — persist without re-checking every frame
+                is_emergency = True
+                emergency_type_val = self.emergency_tracks[track_id]
+                cls_name = "ambulance"
+            elif cls_name in ("car", "truck", "bus"):
+                fh, fw = frame.shape[:2]
+                rx1, ry1 = max(0, sx1), max(0, sy1)
+                rx2, ry2 = min(fw, sx2), min(fh, sy2)
+                if (rx2 - rx1 >= 24) and (ry2 - ry1 >= 24):
+                    roi = frame[ry1:ry2, rx1:rx2]
+                    detected_emerg, e_type = YOLODetector.classify_emergency_vehicle(roi, cls_name)
+                    if detected_emerg:
+                        is_emergency = True
+                        emergency_type_val = e_type
+                        cls_name = "ambulance"
+                        self.emergency_tracks[track_id] = e_type or "ambulance"
+
             vehicle = TrackedVehicle(
                 track_id=track_id,
                 class_id=cls_id,
@@ -254,7 +280,9 @@ class VehicleTracker:
                 speed_kmh=round(instant_speed_kmh, 1),
                 heading_deg=round(heading_deg, 1),
                 frames_tracked=self.track_counts[track_id],
-                is_heavy_vehicle=is_heavy
+                is_heavy_vehicle=is_heavy,
+                is_emergency=is_emergency,
+                emergency_type=emergency_type_val
             )
             tracked_objects.append(vehicle)
 
@@ -262,6 +290,11 @@ class VehicleTracker:
         self._fallback_tracks = {
             fid: b for fid, b in self._fallback_tracks.items()
             if fid in current_frame_ids
+        }
+        # Also prune emergency_tracks for vanished IDs
+        self.emergency_tracks = {
+            tid: etype for tid, etype in self.emergency_tracks.items()
+            if tid in current_frame_ids
         }
         stale_ids = [tid for tid in self.track_histories.keys() if tid not in current_frame_ids and self.track_counts[tid] > 90]
         for tid in stale_ids:
