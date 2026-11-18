@@ -104,6 +104,15 @@
                     </div>
                 </div>
 
+                <!-- Emergency Preemption Alert Banner for Image Mode -->
+                <div id="image-emergency-banner" class="emergency-alert-banner amber-alert-banner" style="display: none;">
+                    <span class="alert-icon-pulse">🚑</span>
+                    <div class="alert-text-group">
+                        <strong class="alert-title">EMERGENCY VEHICLE PRIORITY PREEMPTION ACTIVE!</strong>
+                        <span class="alert-desc" id="image-emergency-banner-desc">Ambulance detected — Priority clearance engaged. All opposing traffic must yield.</span>
+                    </div>
+                </div>
+
                 <!-- 4 High-Visibility Status Cards -->
                 <div class="metrics-grid">
                     <div class="metric-card">
@@ -256,6 +265,15 @@
                     <div class="alert-text-group">
                         <strong class="alert-title">CRITICAL RED ALERT: LEFT PASSING CAR ON CENTRIC LINE!</strong>
                         <span class="alert-desc" id="red-alert-banner-desc">Vehicle detected crossing centric trigger line in LEFT LANE. Potential overtaking / collision hazard!</span>
+                    </div>
+                </div>
+
+                <!-- Phase 2: Emergency Vehicle Priority Preemption Banner for Live Video -->
+                <div id="video-emergency-banner" class="emergency-alert-banner amber-alert-banner" style="display: none;">
+                    <span class="alert-icon-pulse">🚑</span>
+                    <div class="alert-text-group">
+                        <strong class="alert-title">EMERGENCY VEHICLE PRIORITY PREEMPTION ACTIVE!</strong>
+                        <span class="alert-desc" id="video-emergency-banner-desc">Ambulance detected on curve — Signals overridden for rapid emergency clearance.</span>
                     </div>
                 </div>
 

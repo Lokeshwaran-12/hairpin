@@ -33,15 +33,19 @@ class ConflictPair:
 class RiskAssessment:
     overall_level: RiskLevel
     conflict_pairs: List[ConflictPair]
-    signal_a_state: str        # "GREEN", "YELLOW", "RED"
+    signal_a_state: str        # "GREEN", "YELLOW", "RED", "AMBER"
     signal_a_message: str
-    signal_b_state: str        # "GREEN", "YELLOW", "RED"
+    signal_b_state: str        # "GREEN", "YELLOW", "RED", "AMBER"
     signal_b_message: str
     active_vehicles_arm_a: int = 0
     active_vehicles_arm_b: int = 0
     active_vehicles_apex: int = 0
     min_ttc: Optional[float] = None
     hazard_notes: List[str] = field(default_factory=list)
+    # Phase 2: Emergency Vehicle Priority Preemption
+    emergency_preemption_active: bool = False
+    emergency_vehicle_count: int = 0
+    emergency_signal_state: str = "NORMAL"   # "NORMAL" | "PREEMPTED"
 
 
 class CollisionPredictor:
@@ -63,6 +67,7 @@ class CollisionPredictor:
         self.ttc_caution = ttc_caution
         self.pixels_per_meter = max(1.0, pixels_per_meter)
         self.hazard_weights = hazard_weights or {
+            "ambulance": 2.0,
             "bus": 1.5,
             "truck": 1.5,
             "car": 1.0,
@@ -278,8 +283,49 @@ class CollisionPredictor:
             if overall_risk == RiskLevel.SAFE:
                 overall_risk = RiskLevel.CAUTION
 
+        # ------------------------------------------------------------------ #
         # Signal State Computation (Signal A for Uphill, Signal B for Downhill)
-        if overall_risk == RiskLevel.CRITICAL:
+        # ------------------------------------------------------------------ #
+
+        # Phase 2: Emergency Vehicle Priority Preemption
+        # Detect ambulances anywhere in scene and override signals immediately.
+        emergency_vehicles = [v for v in vehicles if getattr(v, "is_emergency", False) or v.class_name == "ambulance"]
+        emergency_preemption_active = len(emergency_vehicles) > 0
+        emergency_signal_state = "PREEMPTED" if emergency_preemption_active else "NORMAL"
+
+        if emergency_preemption_active:
+            overall_risk = max(overall_risk, RiskLevel.WARNING)
+            arm_a_emerg = any(getattr(v, "is_emergency", False) or v.class_name == "ambulance" for v in arm_a_vehicles)
+            arm_b_emerg = any(getattr(v, "is_emergency", False) or v.class_name == "ambulance" for v in arm_b_vehicles)
+            apex_emerg = any(getattr(v, "is_emergency", False) or v.class_name == "ambulance" for v in apex_vehicles)
+
+            if arm_a_emerg and not arm_b_emerg and not apex_emerg:
+                signal_a_state = "AMBER"
+                signal_a_msg   = "PRIORITY CLEARANCE — AMBULANCE ASCENDING"
+                signal_b_state = "RED"
+                signal_b_msg   = "STOP — YIELD TO EMERGENCY AMBULANCE"
+            elif arm_b_emerg and not arm_a_emerg and not apex_emerg:
+                signal_a_state = "RED"
+                signal_a_msg   = "STOP — YIELD TO EMERGENCY AMBULANCE"
+                signal_b_state = "AMBER"
+                signal_b_msg   = "PRIORITY CLEARANCE — AMBULANCE DESCENDING"
+            elif apex_emerg or (arm_a_emerg and arm_b_emerg):
+                signal_a_state = "RED"
+                signal_a_msg   = "STOP — AMBULANCE IN APEX, YIELD"
+                signal_b_state = "RED"
+                signal_b_msg   = "STOP — AMBULANCE IN APEX, YIELD"
+                overall_risk   = RiskLevel.CRITICAL
+            else:
+                signal_a_state = "AMBER"
+                signal_a_msg   = "EMERGENCY VEHICLE — YIELD & CLEAR BEND"
+                signal_b_state = "AMBER"
+                signal_b_msg   = "EMERGENCY VEHICLE — YIELD & CLEAR BEND"
+
+            emerg_note = f"PRIORITY PREEMPTION: {len(emergency_vehicles)} AMBULANCE detected — all traffic yield"
+            if emerg_note not in hazard_notes:
+                hazard_notes.insert(0, emerg_note)
+
+        elif overall_risk == RiskLevel.CRITICAL:
             # Check heavy vehicle priority: uphill or heavier vehicle gets priority
             has_heavy_a = any(v.class_name in ["bus", "truck"] for v in arm_a_vehicles)
             has_heavy_b = any(v.class_name in ["bus", "truck"] for v in arm_b_vehicles)
@@ -327,5 +373,8 @@ class CollisionPredictor:
             active_vehicles_arm_b=len(arm_b_vehicles),
             active_vehicles_apex=len(apex_vehicles),
             min_ttc=min_ttc,
-            hazard_notes=hazard_notes
+            hazard_notes=hazard_notes,
+            emergency_preemption_active=emergency_preemption_active,
+            emergency_vehicle_count=len(emergency_vehicles),
+            emergency_signal_state=emergency_signal_state
         )

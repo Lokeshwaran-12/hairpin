@@ -231,7 +231,7 @@ class HUDVisualizer:
         )
 
     def _render_signal_box(self, frame: np.ndarray, origin: Tuple[int, int], title: str, state: str, message: str):
-        """Renders an individual 3-aspect traffic signal board."""
+        """Renders an individual 3-aspect traffic signal board (supports GREEN/YELLOW/RED/AMBER)."""
         ox, oy = origin
         box_w, box_h = 220, 95
 
@@ -243,10 +243,15 @@ class HUDVisualizer:
         cv2.putText(frame, title, (ox + 10, oy + 20),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.42, (200, 200, 200), 1, cv2.LINE_AA)
 
-        # 3 Aspect Lights: Red, Yellow, Green
+        # 3 Aspect Lights + AMBER override
+        is_amber = (state == "AMBER")
         r_color = (30, 30, 240) if state == "RED" else (40, 40, 70)
-        y_color = (30, 215, 255) if state == "YELLOW" else (40, 60, 70)
+        y_color = (30, 215, 255) if state in ("YELLOW", "AMBER") else (40, 60, 70)
         g_color = (50, 220, 50) if state == "GREEN" else (40, 70, 40)
+
+        # Amber overrides yellow slot with brighter orange
+        if is_amber:
+            y_color = (0, 160, 255)  # BGR: vivid orange-amber
 
         cx_r = ox + 35
         cx_y = ox + 80
@@ -263,9 +268,20 @@ class HUDVisualizer:
         cv2.circle(frame, (cx_g, cy), radius, (150, 150, 150), 1)
 
         # Glow ring around active light
-        active_cx = cx_r if state == "RED" else (cx_y if state == "YELLOW" else cx_g)
-        active_color = r_color if state == "RED" else (y_color if state == "YELLOW" else g_color)
+        if state == "RED":
+            active_cx, active_color = cx_r, r_color
+        elif state in ("YELLOW", "AMBER"):
+            active_cx, active_color = cx_y, y_color
+        else:
+            active_cx, active_color = cx_g, g_color
+
         cv2.circle(frame, (active_cx, cy), radius + 3, active_color, 2)
+
+        # AMBER: draw flashing emergency cross mark above signal housing
+        if is_amber:
+            cross_cx, cross_cy = ox + 175, oy + 45
+            cv2.line(frame, (cross_cx - 10, cross_cy), (cross_cx + 10, cross_cy), (0, 160, 255), 3)
+            cv2.line(frame, (cross_cx, cross_cy - 10), (cross_cx, cross_cy + 10), (0, 160, 255), 3)
 
         # Driver advisory message banner
         cv2.putText(frame, message, (ox + 8, oy + 82),
@@ -311,6 +327,40 @@ class HUDVisualizer:
 
         cv2.putText(frame, status_str, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.58, risk_color, 2, cv2.LINE_AA)
 
+    def _draw_emergency_preemption_banner(self, frame: np.ndarray, emergency_count: int):
+        """
+        Draws a prominent amber emergency preemption banner when an ambulance is detected.
+        Shows across the bottom of the frame with pulsing amber border.
+        """
+        h, w = frame.shape[:2]
+        amber = (0, 160, 255)   # BGR vivid amber/orange
+        white = (255, 255, 255)
+
+        banner_h = 46
+        by1 = h - banner_h - 10
+        by2 = h - 10
+
+        # Semi-transparent dark background
+        overlay = frame.copy()
+        cv2.rectangle(overlay, (10, by1), (w - 10, by2), (20, 20, 20), -1)
+        cv2.addWeighted(overlay, 0.80, frame, 0.20, 0, frame)
+
+        # Amber border
+        cv2.rectangle(frame, (10, by1), (w - 10, by2), amber, 3)
+
+        # Ambulance cross icon (manual draw)
+        icon_x, icon_cy = 38, (by1 + by2) // 2
+        cv2.rectangle(frame, (icon_x - 10, icon_cy - 4), (icon_x + 10, icon_cy + 4), amber, -1)
+        cv2.rectangle(frame, (icon_x - 4, icon_cy - 10), (icon_x + 4, icon_cy + 10), amber, -1)
+
+        # Banner text
+        text = f"🚑  EMERGENCY VEHICLE PRIORITY ACTIVE — {emergency_count} AMBULANCE DETECTED — ALL TRAFFIC YIELD & CLEAR BEND"
+        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.50, 2)
+        tx = (w - tw) // 2
+        ty = (by1 + by2 + th) // 2
+
+        cv2.putText(frame, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.50, amber, 2, cv2.LINE_AA)
+
     def render(
         self,
         frame: np.ndarray,
@@ -346,13 +396,22 @@ class HUDVisualizer:
         # 3. Tracked vehicles with trajectories, marked bounding boxes & badges
         self._draw_vehicles(output_frame, vehicles, assessment)
 
-        # 4. Virtual traffic signal heads
+        # 4. Virtual traffic signal heads (AMBER state supported for preemption)
         self._draw_traffic_signals(output_frame, assessment)
 
         # 5. Central alert banner
         self._draw_top_banner(output_frame, assessment)
 
-        # 6. Flashing Red Alert Perimeter for Left Passing Car Hazard
+        # 6. Phase 2 — Emergency Preemption Overlay (ambulance detected)
+        is_preempted = getattr(assessment, "emergency_preemption_active", False)
+        emerg_count = getattr(assessment, "emergency_vehicle_count", 0)
+        if is_preempted:
+            self._draw_emergency_preemption_banner(output_frame, emerg_count)
+            # Pulsing amber perimeter border (every 5 frames alternates)
+            if (self.frame_idx // 5) % 2 == 0:
+                cv2.rectangle(output_frame, (0, 0), (w - 1, h - 1), (0, 160, 255), 6)
+
+        # 7. Flashing Red Alert Perimeter for Left Passing Car Hazard
         if is_left_lane_alert and (self.frame_idx // 4) % 2 == 0:
             cv2.rectangle(output_frame, (0, 0), (w - 1, h - 1), (0, 0, 255), 8)
 

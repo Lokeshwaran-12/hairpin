@@ -41,6 +41,8 @@ const dom = {
     signalBText: document.getElementById('signal-b-text'),
     signalBDesc: document.getElementById('signal-b-desc'),
     tableResultsBody: document.getElementById('table-results-body'),
+    imageEmergencyBanner: document.getElementById('image-emergency-banner'),
+    imageEmergencyBannerDesc: document.getElementById('image-emergency-banner-desc'),
 
     // Live Video Elements
     videoUploadInput: document.getElementById('video-upload-input'),
@@ -49,6 +51,8 @@ const dom = {
     videoActiveBadge: document.getElementById('video-active-badge'),
     liveStreamPlayer: document.getElementById('live-stream-player'),
     streamLiveTag: document.getElementById('stream-live-tag'),
+    videoEmergencyBanner: document.getElementById('video-emergency-banner'),
+    videoEmergencyBannerDesc: document.getElementById('video-emergency-banner-desc'),
 
     // Centric Detection Line Controls & Metrics
     btnToggleCentric: document.getElementById('btn-toggle-centric'),
@@ -294,6 +298,16 @@ function renderOutput(data) {
     setSignalUI(dom.signalALight, dom.signalAText, dom.signalADesc, risk.signal_a_state, risk.signal_a_message);
     setSignalUI(dom.signalBLight, dom.signalBText, dom.signalBDesc, risk.signal_b_state, risk.signal_b_message);
 
+    // Emergency Preemption Alert Banner for Image Mode
+    const isImagePreempted = Boolean(risk.emergency_preemption_active) || Boolean(data.summary && data.summary.ambulance > 0);
+    if (dom.imageEmergencyBanner) {
+        dom.imageEmergencyBanner.style.display = isImagePreempted ? 'flex' : 'none';
+        if (isImagePreempted && dom.imageEmergencyBannerDesc) {
+            const count = (data.summary && data.summary.ambulance) || risk.emergency_vehicle_count || 1;
+            dom.imageEmergencyBannerDesc.textContent = `🚑 ${count} Ambulance detected — Priority clearance engaged. Signals preempted!`;
+        }
+    }
+
     // 4. Update Output Image
     updateImageSource();
 
@@ -307,6 +321,8 @@ function setSignalUI(dotEl, textEl, descEl, state, msg) {
     dotEl.className = 'signal-dot-lg';
     if (state === 'RED') {
         dotEl.classList.add('dot-red');
+    } else if (state === 'AMBER') {
+        dotEl.classList.add('dot-amber');
     } else if (state === 'YELLOW') {
         dotEl.classList.add('dot-yellow');
     } else {
@@ -588,6 +604,7 @@ async function pollVideoTelemetry() {
             if (dom.liveStreamPlayer && dom.liveStreamPlayer.parentElement) {
                 if (isRedAlert) {
                     dom.liveStreamPlayer.parentElement.classList.add('red-alert-active');
+                    dom.liveStreamPlayer.parentElement.classList.remove('amber-alert-active');
                 } else {
                     dom.liveStreamPlayer.parentElement.classList.remove('red-alert-active');
                 }
@@ -625,6 +642,24 @@ async function pollVideoTelemetry() {
                     dom.centricStatusBadge.style.backgroundColor = '';
                     dom.centricStatusBadge.style.fontWeight = '';
                 }
+            }
+        }
+
+        // Phase 2: Emergency Priority Preemption Banner & Border Glow for Live Video
+        const ep = data.emergency_preemption || {};
+        const isVideoPreempted = Boolean(ep.active);
+        if (dom.videoEmergencyBanner) {
+            dom.videoEmergencyBanner.style.display = isVideoPreempted ? 'flex' : 'none';
+            if (isVideoPreempted && dom.videoEmergencyBannerDesc) {
+                dom.videoEmergencyBannerDesc.textContent = `🚑 ${ep.count || 1} Ambulance active on corridor — Preemption in effect: signals overridden for emergency priority!`;
+            }
+        }
+
+        if (dom.liveStreamPlayer && dom.liveStreamPlayer.parentElement) {
+            if (isVideoPreempted && !Boolean(data.centric_line && data.centric_line.red_alert)) {
+                dom.liveStreamPlayer.parentElement.classList.add('amber-alert-active');
+            } else if (!isVideoPreempted) {
+                dom.liveStreamPlayer.parentElement.classList.remove('amber-alert-active');
             }
         }
 

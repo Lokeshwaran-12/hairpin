@@ -106,3 +106,30 @@ def test_api_left_lane_passing_telemetry():
     assert "left_lane_crossings" in cl
     assert "filter_left_lane_only" in cl
     assert "red_alert" in cl
+
+
+# ------------------------------------------------------------------ #
+#  Phase 2: Emergency Preemption API Telemetry Tests                  #
+# ------------------------------------------------------------------ #
+
+def test_api_stream_telemetry_has_emergency_preemption():
+    """stream_telemetry endpoint must always expose emergency_preemption block."""
+    telemetry = backend_service.stream_telemetry()
+    assert "emergency_preemption" in telemetry
+    ep = telemetry["emergency_preemption"]
+    assert "active" in ep
+    assert "count" in ep
+    assert "state" in ep
+    assert isinstance(ep["active"], bool)
+
+
+def test_api_detect_has_emergency_preemption_fields():
+    """detect endpoint risk_assessment must include emergency preemption metadata."""
+    res = backend_service.detect_image(None)
+    assert res["success"] is True
+    risk = res["risk_assessment"]
+    assert "emergency_preemption_active" in risk
+    assert "emergency_vehicle_count" in risk
+    assert "emergency_signal_state" in risk
+    assert "ambulance" in res["summary"]
+

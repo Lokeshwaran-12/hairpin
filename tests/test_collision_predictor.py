@@ -113,3 +113,97 @@ def test_predictor_multiple_vehicles_in_apex_critical(sample_zones):
     assessment = predictor.evaluate([v1, v2], (720, 1280))
     assert assessment.overall_level == RiskLevel.CRITICAL
     assert assessment.active_vehicles_apex == 2
+
+
+# ------------------------------------------------------------------ #
+#  Phase 2: Emergency Vehicle Priority & Preemption Tests             #
+# ------------------------------------------------------------------ #
+
+def test_predictor_emergency_hazard_weight(sample_zones):
+    """Ambulance must carry highest hazard weight (2.0) for rapid collision preemption."""
+    predictor = CollisionPredictor(zones_config=sample_zones)
+    assert "ambulance" in predictor.hazard_weights
+    assert predictor.hazard_weights["ambulance"] >= 2.0
+
+
+def test_predictor_emergency_preemption_arm_a(sample_zones):
+    """
+    Ambulance in Arm A (Uphill approach) must trigger priority preemption:
+    - Arm A gets AMBER priority clearance
+    - Arm B (opposing) gets RED stop signal
+    - emergency_preemption_active is True
+    """
+    predictor = CollisionPredictor(zones_config=sample_zones)
+    amb = TrackedVehicle(
+        track_id=10,
+        class_id=2,
+        class_name="ambulance",
+        confidence=0.95,
+        box=[300, 480, 340, 528],
+        center=(320, 504),
+        history=[(310, 530), (320, 504)],
+        speed_kmh=55.0,
+        is_emergency=True,
+        emergency_type="ambulance"
+    )
+
+    assessment = predictor.evaluate([amb], (720, 1280))
+    assert assessment.emergency_preemption_active is True
+    assert assessment.emergency_vehicle_count == 1
+    assert assessment.emergency_signal_state == "PREEMPTED"
+    assert assessment.signal_a_state == "AMBER"
+    assert "AMBULANCE" in assessment.signal_a_message
+    assert assessment.signal_b_state == "RED"
+    assert "STOP" in assessment.signal_b_message
+    assert any("AMBULANCE" in note for note in assessment.hazard_notes)
+
+
+def test_predictor_emergency_preemption_arm_b(sample_zones):
+    """
+    Ambulance in Arm B (Downhill approach) must trigger priority preemption:
+    - Arm B gets AMBER priority clearance
+    - Arm A gets RED stop signal
+    """
+    predictor = CollisionPredictor(zones_config=sample_zones)
+    amb = TrackedVehicle(
+        track_id=20,
+        class_id=2,
+        class_name="ambulance",
+        confidence=0.94,
+        box=[780, 480, 840, 530],
+        center=(810, 505),
+        history=[(820, 535), (810, 505)],
+        speed_kmh=50.0,
+        is_emergency=True,
+        emergency_type="ambulance"
+    )
+
+    assessment = predictor.evaluate([amb], (720, 1280))
+    assert assessment.emergency_preemption_active is True
+    assert assessment.signal_b_state == "AMBER"
+    assert assessment.signal_a_state == "RED"
+    assert "STOP" in assessment.signal_a_message
+
+
+def test_predictor_emergency_preemption_in_apex(sample_zones):
+    """
+    Ambulance inside conflict apex halts all opposing arms (both RED).
+    """
+    predictor = CollisionPredictor(zones_config=sample_zones)
+    amb = TrackedVehicle(
+        track_id=30,
+        class_id=2,
+        class_name="ambulance",
+        confidence=0.96,
+        box=[600, 220, 640, 260],
+        center=(620, 240),
+        is_emergency=True,
+        emergency_type="ambulance"
+    )
+
+    assessment = predictor.evaluate([amb], (720, 1280))
+    assert assessment.emergency_preemption_active is True
+    assert assessment.overall_level == RiskLevel.CRITICAL
+    assert assessment.signal_a_state == "RED"
+    assert assessment.signal_b_state == "RED"
+

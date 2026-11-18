@@ -225,8 +225,8 @@ class StreamManager:
                     is_left_lane_alert=is_left_passing_active
                 )
 
-                # Log Warning or Critical incidents (correct argument order: assessment, vehicles, frame)
-                if assessment.overall_level >= RiskLevel.WARNING:
+                # Log Warning, Critical, or Emergency Preemption incidents
+                if assessment.overall_level >= RiskLevel.WARNING or getattr(assessment, "emergency_preemption_active", False):
                     event_logger.log_event(assessment, tracked_v, annotated)
 
                 with self._lock:
@@ -452,7 +452,11 @@ def detect_image(payload: Optional[DetectPayload] = None):
             "active_arm_a": assessment.active_vehicles_arm_a,
             "active_arm_b": assessment.active_vehicles_arm_b,
             "active_apex": assessment.active_vehicles_apex,
-            "min_ttc": assessment.min_ttc
+            "min_ttc": assessment.min_ttc,
+            "emergency_preemption_active": getattr(assessment, "emergency_preemption_active", False),
+            "emergency_vehicle_count": getattr(assessment, "emergency_vehicle_count", 0),
+            "emergency_signal_state": getattr(assessment, "emergency_signal_state", "NORMAL"),
+            "hazard_notes": assessment.hazard_notes
         },
         "images": {
             "boxes_only": b64_boxes,
@@ -538,7 +542,13 @@ def stream_telemetry():
             "signal_a": {"state": "GREEN", "message": "BEND CLEAR"},
             "signal_b": {"state": "GREEN", "message": "BEND CLEAR"},
             "vehicles": [],
-            "centric_line": centric_data
+            "centric_line": centric_data,
+            "emergency_preemption": {
+                "active": False,
+                "count": 0,
+                "state": "NORMAL",
+                "notes": []
+            }
         }
 
     return {
@@ -561,7 +571,13 @@ def stream_telemetry():
             "total": len(vehicles)
         },
         "vehicles": v_data,
-        "centric_line": centric_data
+        "centric_line": centric_data,
+        "emergency_preemption": {
+            "active": getattr(assessment, "emergency_preemption_active", False),
+            "count": getattr(assessment, "emergency_vehicle_count", 0),
+            "state": getattr(assessment, "emergency_signal_state", "NORMAL"),
+            "notes": assessment.hazard_notes
+        }
     }
 
 
