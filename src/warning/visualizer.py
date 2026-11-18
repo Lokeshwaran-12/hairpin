@@ -327,14 +327,19 @@ class HUDVisualizer:
 
         cv2.putText(frame, status_str, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.58, risk_color, 2, cv2.LINE_AA)
 
-    def _draw_emergency_preemption_banner(self, frame: np.ndarray, emergency_count: int):
+    def _draw_emergency_preemption_banner(
+        self,
+        frame: np.ndarray,
+        emergency_count: int,
+        corridor_lock: bool = False,
+        corridor_id: str = "CORRIDOR_HAIRPIN_01"
+    ):
         """
-        Draws a prominent amber emergency preemption banner when an ambulance is detected.
-        Shows across the bottom of the frame with pulsing amber border.
+        Draws a prominent amber emergency preemption banner when an ambulance is detected
+        or during corridor clearance lock.
         """
         h, w = frame.shape[:2]
         amber = (0, 160, 255)   # BGR vivid amber/orange
-        white = (255, 255, 255)
 
         banner_h = 46
         by1 = h - banner_h - 10
@@ -354,12 +359,16 @@ class HUDVisualizer:
         cv2.rectangle(frame, (icon_x - 4, icon_cy - 10), (icon_x + 4, icon_cy + 10), amber, -1)
 
         # Banner text
-        text = f"🚑  EMERGENCY VEHICLE PRIORITY ACTIVE — {emergency_count} AMBULANCE DETECTED — ALL TRAFFIC YIELD & CLEAR BEND"
-        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.50, 2)
+        if corridor_lock and emergency_count == 0:
+            text = f"🚑  CORRIDOR CLEARANCE LOCK ACTIVE [{corridor_id}] — SAFE PASSAGE IN PROGRESS — ALL TRAFFIC YIELD"
+        else:
+            text = f"🚑  EMERGENCY PRIORITY PREEMPTION ACTIVE — {max(1, emergency_count)} AMBULANCE — ALL TRAFFIC YIELD & CLEAR BEND"
+
+        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.46, 2)
         tx = (w - tw) // 2
         ty = (by1 + by2 + th) // 2
 
-        cv2.putText(frame, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.50, amber, 2, cv2.LINE_AA)
+        cv2.putText(frame, text, (tx, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.46, amber, 2, cv2.LINE_AA)
 
     def render(
         self,
@@ -402,11 +411,19 @@ class HUDVisualizer:
         # 5. Central alert banner
         self._draw_top_banner(output_frame, assessment)
 
-        # 6. Phase 2 — Emergency Preemption Overlay (ambulance detected)
+        # 6. Phase 2 & 4 — Emergency Preemption & Corridor Lock Overlay
         is_preempted = getattr(assessment, "emergency_preemption_active", False)
+        is_corridor_locked = getattr(assessment, "corridor_clearance_lock", False)
         emerg_count = getattr(assessment, "emergency_vehicle_count", 0)
-        if is_preempted:
-            self._draw_emergency_preemption_banner(output_frame, emerg_count)
+        corridor_id = getattr(assessment, "corridor_id", "CORRIDOR_HAIRPIN_01")
+
+        if is_preempted or is_corridor_locked:
+            self._draw_emergency_preemption_banner(
+                output_frame,
+                emerg_count,
+                corridor_lock=is_corridor_locked,
+                corridor_id=corridor_id
+            )
             # Pulsing amber perimeter border (every 5 frames alternates)
             if (self.frame_idx // 5) % 2 == 0:
                 cv2.rectangle(output_frame, (0, 0), (w - 1, h - 1), (0, 160, 255), 6)

@@ -5,6 +5,7 @@ estimates Time-to-Conflict (TTC), accounts for heavy vehicle sweep hazards,
 and computes bidirectional traffic signals (Signal A and Signal B).
 """
 import math
+import time
 from enum import IntEnum
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass, field
@@ -46,6 +47,9 @@ class RiskAssessment:
     emergency_preemption_active: bool = False
     emergency_vehicle_count: int = 0
     emergency_signal_state: str = "NORMAL"   # "NORMAL" | "PREEMPTED"
+    # Phase 4: Corridor Tracking & Clearance Lock
+    corridor_clearance_lock: bool = False
+    corridor_id: str = "CORRIDOR_HAIRPIN_01"
 
 
 class CollisionPredictor:
@@ -59,7 +63,9 @@ class CollisionPredictor:
         ttc_warning: float = 6.0,
         ttc_caution: float = 10.0,
         pixels_per_meter: float = 18.0,
-        hazard_weights: Optional[Dict[str, float]] = None
+        hazard_weights: Optional[Dict[str, float]] = None,
+        corridor_id: str = "CORRIDOR_HAIRPIN_01",
+        corridor_lock_timeout: float = 4.5
     ):
         self.raw_zones = zones_config
         self.ttc_critical = ttc_critical
@@ -73,6 +79,10 @@ class CollisionPredictor:
             "car": 1.0,
             "motorcycle": 1.0
         }
+        self.corridor_id = corridor_id
+        self.corridor_lock_timeout = corridor_lock_timeout
+        self._last_emergency_seen_time: float = 0.0
+        self._last_emergency_arm: Optional[str] = None
 
         # Scaled polygons cache
         self.scaled_zones: Dict[str, np.ndarray] = {}
@@ -287,13 +297,29 @@ class CollisionPredictor:
         # Signal State Computation (Signal A for Uphill, Signal B for Downhill)
         # ------------------------------------------------------------------ #
 
-        # Phase 2: Emergency Vehicle Priority Preemption
-        # Detect ambulances anywhere in scene and override signals immediately.
+        # Phase 2 & 4: Emergency Vehicle Priority Preemption & Corridor Clearance Lock
+        now_time = time.time()
         emergency_vehicles = [v for v in vehicles if getattr(v, "is_emergency", False) or v.class_name == "ambulance"]
-        emergency_preemption_active = len(emergency_vehicles) > 0
+        direct_emergency_active = len(emergency_vehicles) > 0
+
+        if direct_emergency_active:
+            self._last_emergency_seen_time = now_time
+            if any(getattr(v, "is_emergency", False) or v.class_name == "ambulance" for v in arm_a_vehicles):
+                self._last_emergency_arm = "arm_a"
+            elif any(getattr(v, "is_emergency", False) or v.class_name == "ambulance" for v in arm_b_vehicles):
+                self._last_emergency_arm = "arm_b"
+            elif any(getattr(v, "is_emergency", False) or v.class_name == "ambulance" for v in apex_vehicles):
+                self._last_emergency_arm = "apex"
+
+        time_since_emergency = now_time - self._last_emergency_seen_time
+        corridor_clearance_lock = direct_emergency_active or (
+            self._last_emergency_seen_time > 0 and time_since_emergency < self.corridor_lock_timeout
+        )
+
+        emergency_preemption_active = corridor_clearance_lock
         emergency_signal_state = "PREEMPTED" if emergency_preemption_active else "NORMAL"
 
-        if emergency_preemption_active:
+        if direct_emergency_active:
             overall_risk = max(overall_risk, RiskLevel.WARNING)
             arm_a_emerg = any(getattr(v, "is_emergency", False) or v.class_name == "ambulance" for v in arm_a_vehicles)
             arm_b_emerg = any(getattr(v, "is_emergency", False) or v.class_name == "ambulance" for v in arm_b_vehicles)
@@ -324,6 +350,30 @@ class CollisionPredictor:
             emerg_note = f"PRIORITY PREEMPTION: {len(emergency_vehicles)} AMBULANCE detected — all traffic yield"
             if emerg_note not in hazard_notes:
                 hazard_notes.insert(0, emerg_note)
+
+        elif corridor_clearance_lock:
+            # Emergency vehicle momentarily occluded behind blind apex/cut: maintain corridor lock
+            overall_risk = max(overall_risk, RiskLevel.WARNING)
+            rem_sec = max(0.0, self.corridor_lock_timeout - time_since_emergency)
+            if self._last_emergency_arm == "arm_a":
+                signal_a_state = "AMBER"
+                signal_a_msg   = "CORRIDOR LOCK — AMBULANCE CLEARING BEND"
+                signal_b_state = "RED"
+                signal_b_msg   = "STOP — EMERGENCY CORRIDOR CLEARANCE"
+            elif self._last_emergency_arm == "arm_b":
+                signal_a_state = "RED"
+                signal_a_msg   = "STOP — EMERGENCY CORRIDOR CLEARANCE"
+                signal_b_state = "AMBER"
+                signal_b_msg   = "CORRIDOR LOCK — AMBULANCE CLEARING BEND"
+            else:
+                signal_a_state = "RED"
+                signal_a_msg   = "STOP — CORRIDOR EMERGENCY CLEARANCE"
+                signal_b_state = "RED"
+                signal_b_msg   = "STOP — CORRIDOR EMERGENCY CLEARANCE"
+
+            lock_note = f"CORRIDOR CLEARANCE LOCK: Retaining preemption for safe passage ({rem_sec:.1f}s)"
+            if lock_note not in hazard_notes:
+                hazard_notes.insert(0, lock_note)
 
         elif overall_risk == RiskLevel.CRITICAL:
             # Check heavy vehicle priority: uphill or heavier vehicle gets priority
@@ -376,5 +426,7 @@ class CollisionPredictor:
             hazard_notes=hazard_notes,
             emergency_preemption_active=emergency_preemption_active,
             emergency_vehicle_count=len(emergency_vehicles),
-            emergency_signal_state=emergency_signal_state
+            emergency_signal_state=emergency_signal_state,
+            corridor_clearance_lock=corridor_clearance_lock,
+            corridor_id=self.corridor_id
         )

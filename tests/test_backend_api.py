@@ -133,3 +133,46 @@ def test_api_detect_has_emergency_preemption_fields():
     assert "emergency_signal_state" in risk
     assert "ambulance" in res["summary"]
 
+
+# ------------------------------------------------------------------ #
+#  Phase 4: Corridor Multi-Camera & Clearance Lock API Tests          #
+# ------------------------------------------------------------------ #
+
+def test_api_corridor_cameras_endpoint():
+    """GET /api/corridor/cameras returns corridor id and all registered sector cameras."""
+    res = backend_service.get_corridor_cameras()
+    assert res["corridor_id"] == "CORRIDOR_HAIRPIN_01"
+    assert "active_camera_id" in res
+    assert "cameras" in res
+    cameras = res["cameras"]
+    assert "CAM_HAIRPIN_01" in cameras
+    assert "CAM_UPHILL_02" in cameras
+    assert "CAM_DOWNHILL_03" in cameras
+
+
+def test_api_corridor_switch_camera_endpoint():
+    """POST /api/corridor/switch-camera updates active sector camera in corridor."""
+    req = backend_service.CameraSwitchRequest(camera_id="CAM_UPHILL_02")
+    res = backend_service.switch_corridor_camera(req)
+    assert res["success"] is True
+    assert res["active_camera_id"] == "CAM_UPHILL_02"
+    assert res["camera_info"]["sector"] == "Arm A (Uphill)"
+
+    # Switch back to apex
+    req_back = backend_service.CameraSwitchRequest(camera_id="CAM_HAIRPIN_01")
+    res_back = backend_service.switch_corridor_camera(req_back)
+    assert res_back["active_camera_id"] == "CAM_HAIRPIN_01"
+
+
+def test_api_corridor_lock_telemetry():
+    """Telemetry contains corridor tracking metadata and clearance lock object."""
+    telemetry = backend_service.stream_telemetry()
+    assert "corridor_id" in telemetry
+    assert "camera_id" in telemetry
+    assert "corridor_lock" in telemetry
+    clock = telemetry["corridor_lock"]
+    assert "locked" in clock
+    assert "preempted" in clock
+    assert "signal_state" in clock
+
+

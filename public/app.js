@@ -52,7 +52,11 @@ const dom = {
     liveStreamPlayer: document.getElementById('live-stream-player'),
     streamLiveTag: document.getElementById('stream-live-tag'),
     videoEmergencyBanner: document.getElementById('video-emergency-banner'),
+    videoEmergencyTitle: document.getElementById('video-emergency-title'),
     videoEmergencyBannerDesc: document.getElementById('video-emergency-banner-desc'),
+    corridorBadge: document.getElementById('corridor-badge'),
+    corridorLockBadge: document.getElementById('corridor-lock-badge'),
+    cameraSelect: document.getElementById('camera-select'),
 
     // Centric Detection Line Controls & Metrics
     btnToggleCentric: document.getElementById('btn-toggle-centric'),
@@ -449,6 +453,32 @@ function initVideoSection() {
         dom.liveStreamPlayer.src = `/api/stream/feed?t=${Date.now()}`;
     });
 
+    // Phase 4: Corridor Camera Switcher
+    if (dom.cameraSelect) {
+        dom.cameraSelect.addEventListener('change', async (e) => {
+            const chosenCam = e.target.value;
+            try {
+                const res = await fetch('/api/corridor/switch-camera', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ camera_id: chosenCam })
+                });
+                if (res.ok) {
+                    const data = await res.json();
+                    if (dom.corridorBadge) {
+                        dom.corridorBadge.textContent = `Corridor: ${data.corridor_id} • Cam: ${data.active_camera_id}`;
+                    }
+                    if (dom.videoActiveBadge && data.camera_info) {
+                        dom.videoActiveBadge.textContent = `Active: ${data.camera_info.name}`;
+                    }
+                    dom.liveStreamPlayer.src = `/api/stream/feed?t=${Date.now()}`;
+                }
+            } catch (err) {
+                console.warn('Camera switch error:', err);
+            }
+        });
+    }
+
     // Centric Detection Line Controls
     let centricLineEnabled = true;
     let centricDebounce = null;
@@ -650,13 +680,34 @@ async function pollVideoTelemetry() {
             }
         }
 
-        // Phase 2: Emergency Priority Preemption Banner & Border Glow for Live Video
+        // Phase 4: Corridor & Camera Telemetry
+        if (dom.corridorBadge && data.corridor_id && data.camera_id) {
+            dom.corridorBadge.textContent = `Corridor: ${data.corridor_id} • Cam: ${data.camera_id}`;
+        }
+
+        const clock = data.corridor_lock || {};
+        const isCorridorLocked = Boolean(clock.locked);
+        if (dom.corridorLockBadge) {
+            dom.corridorLockBadge.style.display = isCorridorLocked ? 'inline-block' : 'none';
+        }
+
+        // Phase 2 & 4: Emergency Priority Preemption & Corridor Lock Banner
         const ep = data.emergency_preemption || {};
-        const isVideoPreempted = Boolean(ep.active);
+        const isVideoPreempted = Boolean(ep.active) || isCorridorLocked;
         if (dom.videoEmergencyBanner) {
             dom.videoEmergencyBanner.style.display = isVideoPreempted ? 'flex' : 'none';
-            if (isVideoPreempted && dom.videoEmergencyBannerDesc) {
-                dom.videoEmergencyBannerDesc.textContent = `🚑 ${ep.count || 1} Ambulance active on corridor — Preemption in effect: signals overridden for emergency priority!`;
+            if (isVideoPreempted) {
+                if (isCorridorLocked && (!ep.count || ep.count === 0)) {
+                    if (dom.videoEmergencyTitle) dom.videoEmergencyTitle.textContent = '🔒 CORRIDOR CLEARANCE LOCK ACTIVE!';
+                    if (dom.videoEmergencyBannerDesc) {
+                        dom.videoEmergencyBannerDesc.textContent = `Ambulance clearing curve corridor in ${data.corridor_id || 'Corridor'} — Signals held safely until exit.`;
+                    }
+                } else {
+                    if (dom.videoEmergencyTitle) dom.videoEmergencyTitle.textContent = 'EMERGENCY VEHICLE PRIORITY PREEMPTION ACTIVE!';
+                    if (dom.videoEmergencyBannerDesc) {
+                        dom.videoEmergencyBannerDesc.textContent = `🚑 ${ep.count || 1} Ambulance active on corridor — Preemption in effect: signals overridden for emergency priority!`;
+                    }
+                }
             }
         }
 

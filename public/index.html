@@ -268,11 +268,11 @@
                     </div>
                 </div>
 
-                <!-- Phase 2: Emergency Vehicle Priority Preemption Banner for Live Video -->
+                <!-- Phase 2 & 4: Emergency Vehicle Priority Preemption Banner for Live Video -->
                 <div id="video-emergency-banner" class="emergency-alert-banner amber-alert-banner" style="display: none;">
                     <span class="alert-icon-pulse">🚑</span>
                     <div class="alert-text-group">
-                        <strong class="alert-title">EMERGENCY VEHICLE PRIORITY PREEMPTION ACTIVE!</strong>
+                        <strong class="alert-title" id="video-emergency-title">EMERGENCY VEHICLE PRIORITY PREEMPTION ACTIVE!</strong>
                         <span class="alert-desc" id="video-emergency-banner-desc">Ambulance detected on curve — Signals overridden for rapid emergency clearance.</span>
                     </div>
                 </div>
@@ -312,9 +312,21 @@
 
                 <!-- Live Stream Video Stage -->
                 <div class="card canvas-card">
-                    <div class="canvas-header">
-                        <h2>Live Detection Feed (Visible Bounding Boxes & HUD Signals)</h2>
-                        <span class="status-tag tag-live" id="stream-live-tag">● LIVE DETECTION ACTIVE</span>
+                    <div class="canvas-header" style="flex-wrap: wrap; gap: 10px;">
+                        <div style="display: flex; align-items: center; gap: 10px; flex-wrap: wrap;">
+                            <h2>Live Detection Feed (Visible Bounding Boxes & HUD Signals)</h2>
+                            <span class="file-badge-lg" id="corridor-badge" style="background: #eef2ff; color: #4338ca; border-color: #c7d2fe;">Corridor: CORRIDOR_HAIRPIN_01</span>
+                            <span class="file-badge-lg" id="corridor-lock-badge" style="display: none; background: #fef3c7; color: #b45309; border-color: #fde68a; font-weight: 700;">🔒 CORRIDOR CLEARANCE LOCK</span>
+                        </div>
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <label for="camera-select" style="font-size: 0.85rem; font-weight: 600; color: #475569;">Sector Cam:</label>
+                            <select id="camera-select" class="select-box-lg" style="padding: 4px 8px; font-size: 0.85rem;">
+                                <option value="CAM_HAIRPIN_01">Apex Blind Curve (CAM_HAIRPIN_01)</option>
+                                <option value="CAM_UPHILL_02">Arm A Uphill (CAM_UPHILL_02)</option>
+                                <option value="CAM_DOWNHILL_03">Arm B Downhill (CAM_DOWNHILL_03)</option>
+                            </select>
+                            <span class="status-tag tag-live" id="stream-live-tag">● LIVE DETECTION ACTIVE</span>
+                        </div>
                     </div>
 
                     <div class="stage-wrapper video-stage-wrapper">

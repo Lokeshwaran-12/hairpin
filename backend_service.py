@@ -86,6 +86,39 @@ class StreamManager:
         self.crossed_vehicle_ids = set()
         self.left_lane_alert_active = False
 
+        # Phase 4: Multi-Camera & Corridor Tracking Architecture
+        self.camera_id = "CAM_HAIRPIN_01"
+        self.corridor_id = "CORRIDOR_HAIRPIN_01"
+        self.camera_registry = {
+            "CAM_HAIRPIN_01": {
+                "name": "Apex Blind Curve Camera",
+                "sector": "Apex",
+                "default_source": "synthetic",
+                "active": True
+            },
+            "CAM_UPHILL_02": {
+                "name": "Arm A Uphill Approach",
+                "sector": "Arm A (Uphill)",
+                "default_source": "data/sample_videos/images.jpeg",
+                "active": False
+            },
+            "CAM_DOWNHILL_03": {
+                "name": "Arm B Downhill Approach",
+                "sector": "Arm B (Downhill)",
+                "default_source": "synthetic",
+                "active": False
+            }
+        }
+
+    def switch_camera(self, camera_id: str, custom_source: Optional[str] = None):
+        """Switches active corridor camera feed."""
+        if camera_id in self.camera_registry:
+            self.camera_id = camera_id
+            for cid in self.camera_registry:
+                self.camera_registry[cid]["active"] = (cid == camera_id)
+            source_to_use = custom_source or self.camera_registry[camera_id]["default_source"]
+            self.set_source(source_to_use, name=self.camera_registry[camera_id]["name"])
+
     def start_if_needed(self):
         """Starts live stream worker only when requested."""
         if not self.is_running:
@@ -442,6 +475,8 @@ def detect_image(payload: Optional[DetectPayload] = None):
         "image_height": h_orig,
         "summary": summary,
         "detections": detection_items,
+        "camera_id": "CAM_STATIC_IMAGE",
+        "corridor_id": "CORRIDOR_HAIRPIN_01",
         "risk_assessment": {
             "level": int(assessment.overall_level),
             "label": level_names.get(int(assessment.overall_level), "UNKNOWN"),
@@ -456,6 +491,8 @@ def detect_image(payload: Optional[DetectPayload] = None):
             "emergency_preemption_active": getattr(assessment, "emergency_preemption_active", False),
             "emergency_vehicle_count": getattr(assessment, "emergency_vehicle_count", 0),
             "emergency_signal_state": getattr(assessment, "emergency_signal_state", "NORMAL"),
+            "corridor_clearance_lock": getattr(assessment, "corridor_clearance_lock", False),
+            "corridor_id": getattr(assessment, "corridor_id", "CORRIDOR_HAIRPIN_01"),
             "hazard_notes": assessment.hazard_notes
         },
         "images": {
@@ -537,6 +574,8 @@ def stream_telemetry():
     if assessment is None:
         return {
             "source": stream_manager.source,
+            "camera_id": stream_manager.camera_id,
+            "corridor_id": stream_manager.corridor_id,
             "risk_level": 0,
             "risk_label": "SAFE",
             "signal_a": {"state": "GREEN", "message": "BEND CLEAR"},
@@ -548,11 +587,19 @@ def stream_telemetry():
                 "count": 0,
                 "state": "NORMAL",
                 "notes": []
+            },
+            "corridor_lock": {
+                "locked": False,
+                "preempted": False,
+                "emergency_count": 0,
+                "signal_state": "NORMAL"
             }
         }
 
     return {
         "source": stream_manager.source,
+        "camera_id": stream_manager.camera_id,
+        "corridor_id": stream_manager.corridor_id,
         "risk_level": int(assessment.overall_level),
         "risk_label": level_names.get(int(assessment.overall_level), "UNKNOWN"),
         "min_ttc": assessment.min_ttc,
@@ -577,6 +624,12 @@ def stream_telemetry():
             "count": getattr(assessment, "emergency_vehicle_count", 0),
             "state": getattr(assessment, "emergency_signal_state", "NORMAL"),
             "notes": assessment.hazard_notes
+        },
+        "corridor_lock": {
+            "locked": getattr(assessment, "corridor_clearance_lock", False),
+            "preempted": getattr(assessment, "emergency_preemption_active", False),
+            "emergency_count": getattr(assessment, "emergency_vehicle_count", 0),
+            "signal_state": getattr(assessment, "emergency_signal_state", "NORMAL")
         }
     }
 
@@ -687,6 +740,38 @@ def switch_stream(req: StreamSwitchRequest):
     """Switches stream source (e.g. back to synthetic curve simulation)."""
     stream_manager.set_source(req.source)
     return {"status": "switched", "source": req.source, "video_name": stream_manager.video_name}
+
+
+class CameraSwitchRequest(BaseModel):
+    camera_id: str
+    custom_source: Optional[str] = None
+
+
+@app.get("/api/corridor/cameras")
+def get_corridor_cameras():
+    """Returns corridor tracking cameras and active selection."""
+    return {
+        "corridor_id": stream_manager.corridor_id,
+        "active_camera_id": stream_manager.camera_id,
+        "cameras": stream_manager.camera_registry
+    }
+
+
+@app.post("/api/corridor/switch-camera")
+def switch_corridor_camera(req: CameraSwitchRequest):
+    """Switches active camera feed within the corridor."""
+    if req.camera_id not in stream_manager.camera_registry:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown camera_id '{req.camera_id}'. Registered cameras: {list(stream_manager.camera_registry.keys())}"
+        )
+    stream_manager.switch_camera(req.camera_id, req.custom_source)
+    return {
+        "success": True,
+        "corridor_id": stream_manager.corridor_id,
+        "active_camera_id": stream_manager.camera_id,
+        "camera_info": stream_manager.camera_registry[req.camera_id]
+    }
 
 
 @app.get("/api/logs")

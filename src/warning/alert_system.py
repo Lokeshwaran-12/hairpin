@@ -60,14 +60,17 @@ class AlertSystem:
             except Exception as e:
                 print(f"[AlertSystem] Hardware callback error: {e}")
 
-        # Check audio trigger
-        if self.enable_audio and assessment.overall_level >= RiskLevel.WARNING:
+        # Check audio trigger (Warning, Critical, or Emergency Priority Siren)
+        is_emergency = getattr(assessment, "emergency_preemption_active", False)
+        if self.enable_audio and (assessment.overall_level >= RiskLevel.WARNING or is_emergency):
             with self._lock:
                 if (now - self.last_beep_time) >= self.cooldown_seconds:
                     self.last_beep_time = now
 
-                    # Critical risk emits higher frequency / longer pulse
-                    if assessment.overall_level == RiskLevel.CRITICAL:
+                    # Emergency preemption siren has highest acoustic priority
+                    if is_emergency:
+                        self._play_buzzer_async(freq=1850, duration=240)
+                    elif assessment.overall_level == RiskLevel.CRITICAL:
                         self._play_buzzer_async(freq=1600, duration=280)
                     else:
                         self._play_buzzer_async(freq=self.buzzer_freq_hz, duration=self.buzzer_duration_ms)

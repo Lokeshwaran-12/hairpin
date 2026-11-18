@@ -1,6 +1,7 @@
 """
 Tests for Collision Risk Predictor and Bidirectional Signal Logic.
 """
+import time
 import pytest
 from src.tracking.tracker import TrackedVehicle
 from src.risk_assessment.collision_predictor import CollisionPredictor, RiskLevel
@@ -206,4 +207,84 @@ def test_predictor_emergency_preemption_in_apex(sample_zones):
     assert assessment.overall_level == RiskLevel.CRITICAL
     assert assessment.signal_a_state == "RED"
     assert assessment.signal_b_state == "RED"
+
+
+# ------------------------------------------------------------------ #
+#  Phase 4: Corridor Clearance Lock & Multi-Camera Tracking Tests     #
+# ------------------------------------------------------------------ #
+
+def test_predictor_corridor_clearance_lock_persistence(sample_zones):
+    """
+    Corridor Clearance Lock: When an ambulance is occluded behind a blind curve apex,
+    preemption must remain safely locked for corridor_lock_timeout seconds.
+    """
+    predictor = CollisionPredictor(
+        zones_config=sample_zones,
+        corridor_id="CORRIDOR_HAIRPIN_01",
+        corridor_lock_timeout=4.5
+    )
+
+    amb = TrackedVehicle(
+        track_id=40,
+        class_id=2,
+        class_name="ambulance",
+        confidence=0.95,
+        box=[300, 480, 340, 528],
+        center=(320, 504),
+        is_emergency=True,
+        emergency_type="ambulance"
+    )
+
+    # Frame 1: Ambulance visible in Arm A
+    ass1 = predictor.evaluate([amb], (720, 1280))
+    assert ass1.emergency_preemption_active is True
+    assert ass1.corridor_clearance_lock is True
+    assert ass1.signal_a_state == "AMBER"
+    assert ass1.signal_b_state == "RED"
+
+    # Frame 2: Ambulance temporarily occluded behind blind apex (0 vehicles detected)
+    ass2 = predictor.evaluate([], (720, 1280))
+    assert ass2.corridor_clearance_lock is True
+    assert ass2.emergency_preemption_active is True
+    assert ass2.corridor_id == "CORRIDOR_HAIRPIN_01"
+    assert ass2.signal_a_state == "AMBER"
+    assert ass2.signal_b_state == "RED"  # Opposing traffic stays stopped!
+    assert any("CORRIDOR CLEARANCE LOCK" in note for note in ass2.hazard_notes)
+
+
+def test_predictor_corridor_clearance_lock_expiry(sample_zones):
+    """
+    After corridor_lock_timeout elapses with no further emergency detections,
+    the corridor clearance lock decays and normal traffic flow resumes.
+    """
+    predictor = CollisionPredictor(
+        zones_config=sample_zones,
+        corridor_id="CORRIDOR_HAIRPIN_01",
+        corridor_lock_timeout=1.0  # 1.0 second timeout for quick test
+    )
+
+    amb = TrackedVehicle(
+        track_id=50,
+        class_id=2,
+        class_name="ambulance",
+        confidence=0.95,
+        box=[300, 480, 340, 528],
+        center=(320, 504),
+        is_emergency=True,
+        emergency_type="ambulance"
+    )
+
+    # Frame 1: Preemption engaged
+    predictor.evaluate([amb], (720, 1280))
+
+    # Artificially age the last seen timestamp past the timeout
+    predictor._last_emergency_seen_time = time.time() - 2.0
+
+    # Frame 2: Evaluated after timeout has expired
+    ass = predictor.evaluate([], (720, 1280))
+    assert ass.corridor_clearance_lock is False
+    assert ass.emergency_preemption_active is False
+    assert ass.signal_a_state == "GREEN"
+    assert ass.signal_b_state == "GREEN"
+
 
