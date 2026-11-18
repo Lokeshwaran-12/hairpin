@@ -690,9 +690,15 @@ def switch_stream(req: StreamSwitchRequest):
 
 
 @app.get("/api/logs")
-def get_logs(limit: int = Query(50)):
-    """Retrieves recent event records from SQLite."""
-    return event_logger.get_recent_events(limit=limit)
+def get_logs(limit: int = Query(50), emergency_only: bool = Query(False)):
+    """Retrieves recent event records from SQLite with optional emergency filtering."""
+    return event_logger.get_recent_events(limit=limit, emergency_only=emergency_only)
+
+
+@app.get("/api/logs/emergency-summary")
+def get_emergency_logs_summary():
+    """Retrieves statistical counts of emergency vehicle and preemption incidents."""
+    return event_logger.get_emergency_summary()
 
 
 @app.get("/api/stats")

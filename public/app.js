@@ -83,8 +83,13 @@ const dom = {
     streamSignalBText: document.getElementById('stream-signal-b-text'),
     streamSignalBDesc: document.getElementById('stream-signal-b-desc'),
 
-    // Logs
+    // Logs (Phase 3)
     btnReloadLogs: document.getElementById('btn-reload-logs'),
+    btnLogsAll: document.getElementById('btn-logs-all'),
+    btnLogsEmergency: document.getElementById('btn-logs-emergency'),
+    logsTotalCount: document.getElementById('logs-total-count'),
+    logsEmergencyCount: document.getElementById('logs-emergency-count'),
+    logsEmergencyDetail: document.getElementById('logs-emergency-detail'),
     tableLogsBody: document.getElementById('table-logs-body')
 };
 
@@ -676,26 +681,70 @@ async function pollVideoTelemetry() {
 }
 
 // -----------------------------------------------------------------------------
-// 5. Incident Event Logs Section
+// 5. Incident Event Logs Section (Phase 3: Emergency Filtering & Archival)
 // -----------------------------------------------------------------------------
+let currentLogsFilter = 'all';
+
 function initLogsSection() {
-    dom.btnReloadLogs.addEventListener('click', loadLogs);
+    if (dom.btnReloadLogs) dom.btnReloadLogs.addEventListener('click', () => loadLogs());
+    if (dom.btnLogsAll) {
+        dom.btnLogsAll.addEventListener('click', () => {
+            currentLogsFilter = 'all';
+            dom.btnLogsAll.className = 'btn btn-primary';
+            if (dom.btnLogsEmergency) dom.btnLogsEmergency.className = 'btn btn-secondary';
+            loadLogs();
+        });
+    }
+    if (dom.btnLogsEmergency) {
+        dom.btnLogsEmergency.addEventListener('click', () => {
+            currentLogsFilter = 'emergency';
+            dom.btnLogsEmergency.className = 'btn btn-primary';
+            if (dom.btnLogsAll) dom.btnLogsAll.className = 'btn btn-secondary';
+            loadLogs();
+        });
+    }
 }
 
 async function loadLogs() {
-    dom.tableLogsBody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">Loading incident records from database...</td></tr>';
+    dom.tableLogsBody.innerHTML = '<tr><td colspan="9" class="text-center text-muted">Loading incident records from database...</td></tr>';
     try {
-        const res = await fetch('/api/logs?limit=50');
-        const logs = await res.json();
+        const emergencyOnly = (currentLogsFilter === 'emergency');
+        const [logsRes, summaryRes] = await Promise.all([
+            fetch(`/api/logs?limit=50&emergency_only=${emergencyOnly}`),
+            fetch('/api/logs/emergency-summary').catch(() => null)
+        ]);
+
+        const logs = await logsRes.json();
+        if (summaryRes && summaryRes.ok) {
+            const sumData = await summaryRes.json();
+            if (dom.logsEmergencyCount) dom.logsEmergencyCount.textContent = sumData.total_emergency_events || 0;
+            if (dom.logsEmergencyDetail) {
+                dom.logsEmergencyDetail.textContent = `${sumData.ambulance_count || 0} Ambulances • ${sumData.preemptions_triggered || 0} Preemptions`;
+            }
+        }
+
         dom.tableLogsBody.innerHTML = '';
 
         if (!logs || logs.length === 0) {
-            dom.tableLogsBody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No high-risk incident events logged yet. System in normal flow.</td></tr>';
+            const emptyMsg = emergencyOnly ?
+                'No emergency vehicle or ambulance preemption events logged yet.' :
+                'No high-risk incident events logged yet. System in normal flow.';
+            dom.tableLogsBody.innerHTML = `<tr><td colspan="9" class="text-center text-muted">${emptyMsg}</td></tr>`;
             return;
         }
 
+        if (dom.logsTotalCount && !emergencyOnly) {
+            dom.logsTotalCount.textContent = logs.length;
+        }
+
         logs.forEach(row => {
+            const isEmerg = (row.is_emergency === 1) || (row.emergency_preempted === 1) || (row.hazard_description && row.hazard_description.includes('AMBULANCE'));
+            const statusBadge = isEmerg ?
+                '<span class="badge-emergency">🚑 AMBULANCE PREEMPTION</span>' :
+                '<span class="badge-normal">ROUTINE</span>';
+
             const tr = document.createElement('tr');
+            if (isEmerg) tr.className = 'row-emergency';
             tr.innerHTML = `
                 <td><strong>${row.timestamp}</strong></td>
                 <td>${row.risk_label} (${row.risk_level})</td>
@@ -704,11 +753,12 @@ async function loadLogs() {
                 <td>${row.vehicle_classes || 'N/A'}</td>
                 <td><strong>${row.signal_a_state}</strong></td>
                 <td><strong>${row.signal_b_state}</strong></td>
+                <td>${statusBadge}</td>
                 <td>${row.hazard_description || 'Routine passage'}</td>
             `;
             dom.tableLogsBody.appendChild(tr);
         });
     } catch (err) {
-        dom.tableLogsBody.innerHTML = `<tr><td colspan="8" class="text-center text-muted">Error loading logs: ${err.message}</td></tr>`;
+        dom.tableLogsBody.innerHTML = `<tr><td colspan="9" class="text-center text-muted">Error loading logs: ${err.message}</td></tr>`;
     }
 }

@@ -64,28 +64,42 @@ class EventLogger:
             self.snapshots_dir = fallback_snaps
 
     def _init_sqlite(self):
-        """Creates SQLite tables if they do not exist."""
+        """Creates SQLite tables if they do not exist and applies schema migrations."""
+        schema_sql = """
+            CREATE TABLE IF NOT EXISTS risk_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT NOT NULL,
+                risk_level INTEGER NOT NULL,
+                risk_label TEXT NOT NULL,
+                min_ttc REAL,
+                vehicles_count INTEGER NOT NULL,
+                vehicle_classes TEXT,
+                vehicle_ids TEXT,
+                signal_a_state TEXT,
+                signal_b_state TEXT,
+                signal_a_message TEXT,
+                signal_b_message TEXT,
+                hazard_description TEXT,
+                snapshot_path TEXT,
+                is_emergency INTEGER DEFAULT 0,
+                emergency_type TEXT,
+                emergency_preempted INTEGER DEFAULT 0
+            )
+        """
         try:
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS risk_events (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        timestamp TEXT NOT NULL,
-                        risk_level INTEGER NOT NULL,
-                        risk_label TEXT NOT NULL,
-                        min_ttc REAL,
-                        vehicles_count INTEGER NOT NULL,
-                        vehicle_classes TEXT,
-                        vehicle_ids TEXT,
-                        signal_a_state TEXT,
-                        signal_b_state TEXT,
-                        signal_a_message TEXT,
-                        signal_b_message TEXT,
-                        hazard_description TEXT,
-                        snapshot_path TEXT
-                    )
-                """)
+                cursor.execute(schema_sql)
+                # Auto-migrate columns for existing databases
+                for col_name, col_def in [
+                    ("is_emergency", "INTEGER DEFAULT 0"),
+                    ("emergency_type", "TEXT"),
+                    ("emergency_preempted", "INTEGER DEFAULT 0")
+                ]:
+                    try:
+                        cursor.execute(f"ALTER TABLE risk_events ADD COLUMN {col_name} {col_def}")
+                    except sqlite3.OperationalError:
+                        pass
                 conn.commit()
         except sqlite3.OperationalError as e:
             # Fallback to in-memory if disk is inaccessible
@@ -93,24 +107,7 @@ class EventLogger:
             self.db_path = ":memory:"
             with sqlite3.connect(self.db_path) as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS risk_events (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        timestamp TEXT NOT NULL,
-                        risk_level INTEGER NOT NULL,
-                        risk_label TEXT NOT NULL,
-                        min_ttc REAL,
-                        vehicles_count INTEGER NOT NULL,
-                        vehicle_classes TEXT,
-                        vehicle_ids TEXT,
-                        signal_a_state TEXT,
-                        signal_b_state TEXT,
-                        signal_a_message TEXT,
-                        signal_b_message TEXT,
-                        hazard_description TEXT,
-                        snapshot_path TEXT
-                    )
-                """)
+                cursor.execute(schema_sql)
                 conn.commit()
 
     def _init_csv(self):
@@ -132,7 +129,10 @@ class EventLogger:
                         "signal_a_message",
                         "signal_b_message",
                         "hazard_description",
-                        "snapshot_path"
+                        "snapshot_path",
+                        "is_emergency",
+                        "emergency_type",
+                        "emergency_preempted"
                     ])
         except (PermissionError, OSError):
             pass
@@ -174,12 +174,30 @@ class EventLogger:
         v_ids = ",".join([str(v.track_id) for v in vehicles])
         hazard_desc = "; ".join(assessment.hazard_notes) or "Normal traffic monitoring"
 
-        # Check snapshot capture
+        # Determine emergency status (Phase 3)
+        has_emergency_vehicle = any(getattr(v, "is_emergency", False) or v.class_name == "ambulance" for v in vehicles)
+        is_preempted = getattr(assessment, "emergency_preemption_active", False)
+        is_emergency = 1 if (has_emergency_vehicle or is_preempted) else 0
+        emergency_type = None
+        for v in vehicles:
+            if getattr(v, "is_emergency", False) or v.class_name == "ambulance":
+                emergency_type = getattr(v, "emergency_type", None) or "ambulance"
+                break
+        if not emergency_type and is_preempted:
+            emergency_type = "ambulance"
+        emergency_preempted = 1 if is_preempted else 0
+
+        # Check snapshot capture (also captures for emergency vehicle / preemption)
         snapshot_path = None
-        if self.save_snapshots and assessment.overall_level >= self.snapshot_min_risk and frame is not None:
+        should_snap = (
+            (self.save_snapshots and frame is not None) and
+            (assessment.overall_level >= self.snapshot_min_risk or is_emergency == 1)
+        )
+        if should_snap:
             if (now - self.last_snapshot_time) >= self.snapshot_cooldown:
                 self.last_snapshot_time = now
-                filename = f"incident_{now_dt.strftime('%Y%m%d_%H%M%S')}_lvl{int(assessment.overall_level)}.jpg"
+                prefix = "emergency_ambulance" if is_emergency == 1 else "incident"
+                filename = f"{prefix}_{now_dt.strftime('%Y%m%d_%H%M%S')}_lvl{int(assessment.overall_level)}.jpg"
                 full_path = os.path.join(self.snapshots_dir, filename)
                 try:
                     cv2.imwrite(full_path, frame)
@@ -195,8 +213,9 @@ class EventLogger:
                     INSERT INTO risk_events (
                         timestamp, risk_level, risk_label, min_ttc, vehicles_count,
                         vehicle_classes, vehicle_ids, signal_a_state, signal_b_state,
-                        signal_a_message, signal_b_message, hazard_description, snapshot_path
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        signal_a_message, signal_b_message, hazard_description, snapshot_path,
+                        is_emergency, emergency_type, emergency_preempted
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, (
                     timestamp_str,
                     int(assessment.overall_level),
@@ -210,7 +229,10 @@ class EventLogger:
                     assessment.signal_a_message,
                     assessment.signal_b_message,
                     hazard_desc,
-                    snapshot_path
+                    snapshot_path,
+                    is_emergency,
+                    emergency_type,
+                    emergency_preempted
                 ))
                 conn.commit()
         except Exception as e:
@@ -233,28 +255,66 @@ class EventLogger:
                     assessment.signal_a_message,
                     assessment.signal_b_message,
                     hazard_desc,
-                    snapshot_path or ""
+                    snapshot_path or "",
+                    is_emergency,
+                    emergency_type or "",
+                    emergency_preempted
                 ])
         except Exception:
             pass
 
         return snapshot_path
 
-    def get_recent_events(self, limit: int = 50) -> List[Dict[str, Any]]:
-        """Retrieves recent event records for the dashboard."""
+    def get_recent_events(self, limit: int = 50, emergency_only: bool = False) -> List[Dict[str, Any]]:
+        """Retrieves recent event records for the dashboard, with optional emergency filter."""
         try:
             with sqlite3.connect(self.db_path) as conn:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
-                cursor.execute("""
-                    SELECT * FROM risk_events
-                    ORDER BY id DESC
-                    LIMIT ?
-                """, (limit,))
+                if emergency_only:
+                    cursor.execute("""
+                        SELECT * FROM risk_events
+                        WHERE is_emergency = 1 OR emergency_preempted = 1 OR hazard_description LIKE '%AMBULANCE%'
+                        ORDER BY id DESC
+                        LIMIT ?
+                    """, (limit,))
+                else:
+                    cursor.execute("""
+                        SELECT * FROM risk_events
+                        ORDER BY id DESC
+                        LIMIT ?
+                    """, (limit,))
                 rows = cursor.fetchall()
                 return [dict(row) for row in rows]
         except Exception:
             return []
+
+    def get_emergency_summary(self) -> Dict[str, Any]:
+        """Returns statistical counts of emergency incidents and preemptions."""
+        stats = {
+            "total_emergency_events": 0,
+            "ambulance_count": 0,
+            "preemptions_triggered": 0
+        }
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT 
+                        COUNT(*),
+                        SUM(CASE WHEN emergency_type = 'ambulance' OR vehicle_classes LIKE '%ambulance%' THEN 1 ELSE 0 END),
+                        SUM(CASE WHEN emergency_preempted = 1 THEN 1 ELSE 0 END)
+                    FROM risk_events
+                    WHERE is_emergency = 1 OR emergency_preempted = 1 OR hazard_description LIKE '%AMBULANCE%'
+                """)
+                row = cursor.fetchone()
+                if row and row[0] is not None:
+                    stats["total_emergency_events"] = int(row[0] or 0)
+                    stats["ambulance_count"] = int(row[1] or 0)
+                    stats["preemptions_triggered"] = int(row[2] or 0)
+        except Exception:
+            pass
+        return stats
 
     def get_risk_summary(self) -> Dict[str, int]:
         """Returns count of events per risk level."""

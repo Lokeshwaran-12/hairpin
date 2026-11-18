@@ -807,3 +807,37 @@ input[type="range"] {
     background-color: #f59e0b !important;
     box-shadow: 0 0 14px rgba(245, 158, 11, 0.9) !important;
 }
+
+/* ---------------- 12. Phase 3: Emergency Event Audit Badges ---------------- */
+.badge-emergency {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background-color: #fef3c7;
+    color: #b45309;
+    border: 1.5px solid #f59e0b;
+    border-radius: var(--radius-sm);
+    padding: 3px 8px;
+    font-size: 0.80rem;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+}
+
+.badge-normal {
+    display: inline-block;
+    background-color: #f1f5f9;
+    color: #64748b;
+    border: 1px solid #cbd5e1;
+    border-radius: var(--radius-sm);
+    padding: 3px 8px;
+    font-size: 0.80rem;
+    font-weight: 600;
+}
+
+.row-emergency {
+    background-color: rgba(254, 243, 199, 0.35) !important;
+}
+
+.row-emergency:hover {
+    background-color: rgba(254, 243, 199, 0.65) !important;
+}

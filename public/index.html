@@ -361,16 +361,33 @@
                 <div class="view-header">
                     <div>
                         <h1>Incident Event Logs & Safety Archival</h1>
-                        <p class="view-subtitle">Automatic audit trail capturing timestamps, risk escalations, and vehicle trajectories for safety compliance.</p>
+                        <p class="view-subtitle">Automatic audit trail capturing timestamps, risk escalations, and emergency vehicle preemption events.</p>
+                    </div>
+                </div>
+
+                <!-- Phase 3: Incident & Emergency Summary Cards -->
+                <div class="metrics-grid" style="margin-bottom: 20px;">
+                    <div class="metric-card">
+                        <div class="metric-header">TOTAL LOGGED INCIDENTS</div>
+                        <div class="metric-value text-blue" id="logs-total-count">0</div>
+                        <div class="metric-detail">Archived in SQLite database</div>
+                    </div>
+
+                    <div class="metric-card">
+                        <div class="metric-header">EMERGENCY PREEMPTIONS</div>
+                        <div class="metric-value text-orange" id="logs-emergency-count">0</div>
+                        <div class="metric-detail" id="logs-emergency-detail">Ambulance priority clearances</div>
                     </div>
                 </div>
 
                 <div class="card">
                     <div class="canvas-header">
                         <h2>Recorded Traffic Events (SQLite Database)</h2>
-                        <button class="btn btn-secondary btn-lg" id="btn-reload-logs">
-                            🔄 Refresh Logs
-                        </button>
+                        <div style="display: flex; gap: 10px; align-items: center;">
+                            <button class="btn btn-primary" id="btn-logs-all">📋 All Incidents</button>
+                            <button class="btn btn-secondary" id="btn-logs-emergency">🚑 Emergency Only</button>
+                            <button class="btn btn-outline" id="btn-reload-logs">🔄 Refresh</button>
+                        </div>
                     </div>
 
                     <div class="table-scroll">
@@ -384,12 +401,13 @@
                                     <th>Target Classes</th>
                                     <th>Signal A</th>
                                     <th>Signal B</th>
+                                    <th>Priority / Status</th>
                                     <th>Hazard Summary</th>
                                 </tr>
                             </thead>
                             <tbody id="table-logs-body">
                                 <tr>
-                                    <td colspan="8" class="text-center text-muted">Loading incident records...</td>
+                                    <td colspan="9" class="text-center text-muted">Loading incident records...</td>
                                 </tr>
                             </tbody>
                         </table>
