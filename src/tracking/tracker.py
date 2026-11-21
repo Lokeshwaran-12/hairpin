@@ -204,8 +204,8 @@ class VehicleTracker:
             area_box = w_box * h_box
             is_heavy = (cls_name in ["truck", "bus"])
 
-            # Heavy Vehicle Promotion: Large footprint vehicles on mountain curves
-            if not is_heavy and area_box >= 18000 and (w_box > 130 or h_box > 110):
+            # Heavy Vehicle Promotion: Large footprint tall commercial vehicles on mountain curves (not flat sedans)
+            if not is_heavy and area_box >= 22000 and h_box >= 115 and (h_box / float(w_box)) >= 0.55:
                 cls_name = "truck"
                 is_heavy = True
 
@@ -278,10 +278,10 @@ class VehicleTracker:
                     detected_emerg = False
                     e_type = None
 
-                    # If fine-tuned ambulance neural model is loaded, check ROI with model
+                    # If fine-tuned ambulance neural model is loaded, check ROI with calibrated confidence
                     if self.ambulance_model_loaded and self.ambulance_model is not None:
                         try:
-                            amb_pred = self.ambulance_model.predict(source=roi, conf=0.25, verbose=False)
+                            amb_pred = self.ambulance_model.predict(source=roi, conf=0.50, verbose=False)
                             if amb_pred and len(amb_pred) > 0 and len(amb_pred[0].boxes) > 0:
                                 detected_emerg = True
                                 e_type = "ambulance"
@@ -294,8 +294,8 @@ class VehicleTracker:
 
                     if detected_emerg:
                         self.emergency_hits[track_id] = self.emergency_hits.get(track_id, 0) + 1
-                        # If detected by neural model OR confirmed across multiple frames
-                        if self.ambulance_model_loaded or self.emergency_hits[track_id] >= 2:
+                        # Multi-frame confirmation across 2 frames to prevent transient video flicker
+                        if self.emergency_hits[track_id] >= 2:
                             is_emergency = True
                             emergency_type_val = e_type
                             cls_name = "ambulance"

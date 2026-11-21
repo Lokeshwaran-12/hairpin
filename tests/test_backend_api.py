@@ -74,6 +74,15 @@ def test_api_video_set_source_synthetic():
     assert res["source"] == "synthetic"
 
 
+def test_api_video_set_source_endpoint():
+    # Test setting source via POST /api/video/set-source
+    req = backend_service.VideoSetSourceRequest(video_path="synthetic", filename="Synthetic Curve")
+    res = backend_service.set_video_source(req)
+    assert res["success"] is True
+    assert res["status"] == "active"
+    assert "stream_url" in res
+
+
 def test_api_centric_line_config_and_reset():
     cfg = backend_service.CentricLineConfig(enabled=True, y_ratio=0.55)
     res = backend_service.configure_centric_line(cfg)

@@ -11,10 +11,10 @@ model:
   ambulance_weights: "models/yolov8n_ambulance.pt"
   enable_fine_tuned_ambulance: true
   confidence: 0.35
-  ambulance_conf: 0.75
+  ambulance_conf: 0.50
   iou_threshold: 0.45
-  # Target COCO classes: 2: car, 3: motorcycle, 5: bus, 7: truck
-  target_classes: [2, 3, 5, 7]
+  # Target COCO classes: 2: car, 3: motorcycle, 5: bus, 6: freight truck, 7: truck
+  target_classes: [2, 3, 5, 6, 7]
   device: "cpu"  # "cuda" or "cpu"
 
 preprocessing:

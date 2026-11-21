@@ -61,7 +61,7 @@ detector_model = YOLODetector(
     ambulance_weights=model_cfg.get("ambulance_weights", "models/yolov8n_ambulance.pt"),
     enable_fine_tuned_ambulance=model_cfg.get("enable_fine_tuned_ambulance", True),
     confidence_threshold=model_cfg.get("confidence", 0.20),
-    ambulance_conf=model_cfg.get("ambulance_conf", 0.75),
+    ambulance_conf=model_cfg.get("ambulance_conf", 0.50),
     iou_threshold=model_cfg.get("iou_threshold", 0.45)
 )
 preprocessor = FramePreprocessor(enable_clahe=True)
@@ -142,7 +142,12 @@ class StreamManager:
 
             real_source = self.source
             self.stream = VideoStreamSource(source=real_source, width=1280, height=720, fps=30)
-            self.tracker = VehicleTracker(model_path="yolov8n.pt", conf=0.18)
+            self.tracker = VehicleTracker(
+                model_path=model_cfg.get("weights", "yolov8n.pt"),
+                ambulance_weights=model_cfg.get("ambulance_weights", "models/yolov8n_ambulance.pt"),
+                enable_fine_tuned_ambulance=model_cfg.get("enable_fine_tuned_ambulance", True),
+                conf=0.18
+            )
             self.is_running = True
 
             if self._thread is None or not self._thread.is_alive():
@@ -694,16 +699,26 @@ class VideoSetSourceRequest(BaseModel):
 
 @app.post("/api/video/set-source")
 def set_video_source(req: VideoSetSourceRequest):
-    """Sets the active live video stream source to an uploaded video."""
-    if not os.path.exists(req.video_path):
+    """Sets the active live video stream source to an uploaded video, webcam, RTSP, or simulation."""
+    source_val = req.video_path.strip()
+    is_special = (
+        source_val.lower() == "synthetic"
+        or source_val.isdigit()
+        or source_val.startswith("rtsp://")
+        or source_val.startswith("http://")
+        or source_val.startswith("https://")
+    )
+    if not is_special and not os.path.exists(source_val):
         raise HTTPException(status_code=404, detail=f"Video file not found at {req.video_path}")
-    name = req.filename or os.path.basename(req.video_path)
-    stream_manager.set_source(req.video_path, name=name)
+    name = req.filename or (os.path.basename(source_val) if not is_special else ("Simulation Highway Curve" if source_val.lower() == "synthetic" else f"Live Feed ({source_val})"))
+    stream_manager.set_source(source_val, name=name)
     return {
         "success": True,
         "status": "active",
         "video_name": name,
-        "video_path": req.video_path
+        "video_path": req.video_path,
+        "is_custom_video": source_val.lower() != "synthetic",
+        "stream_url": "/api/stream/feed"
     }
 
 
