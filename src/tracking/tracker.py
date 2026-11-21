@@ -174,7 +174,7 @@ class VehicleTracker:
                 amb_res = self.ambulance_model.predict(
                     source=frame,
                     imgsz=self.imgsz,
-                    conf=0.45,
+                    conf=0.25,
                     iou=self.iou,
                     device=self.device,
                     verbose=False
@@ -308,7 +308,7 @@ class VehicleTracker:
                 is_emergency = True
                 emergency_type_val = self.emergency_tracks[track_id]
                 cls_name = "ambulance"
-            elif cls_name in ("car", "truck"):  # Bus is protected and never converted to ambulance
+            elif cls_name in ("car", "truck", "bus"):
                 detected_emerg = False
                 e_type = None
 
@@ -317,7 +317,13 @@ class VehicleTracker:
                 matched_neural_box = False
                 for abox, alabel, aconf in full_frame_amb_boxes:
                     iou_val = YOLODetector._compute_iou(current_box, abox)
-                    if iou_val >= 0.35:
+                    ov_val = YOLODetector._compute_overlap_ratio(current_box, abox)
+                    if iou_val >= 0.30 or ov_val >= 0.45:
+                        # Protect giant commercial buses (area >= 80000 or width >= 280)
+                        is_giant_coach = (cls_name == "bus" and (w_box * h_box >= 80000 or w_box >= 280) and iou_val < 0.65)
+                        if is_giant_coach:
+                            continue
+
                         detected_emerg = True
                         matched_neural_box = True
                         e_type = alabel
@@ -365,8 +371,8 @@ class VehicleTracker:
             # 1. Skip duplicate if another confirmed ambulance already covers this region
             if any(v.is_emergency and (YOLODetector._compute_iou(v.box, abox) >= 0.15 or YOLODetector._compute_overlap_ratio(v.box, abox) >= 0.25) for v in tracked_objects):
                 continue
-            # 2. Bus Protection: do not inject an ambulance box that overlaps a confirmed real bus
-            if any(v.class_name == "bus" and (YOLODetector._compute_iou(v.box, abox) >= 0.15 or YOLODetector._compute_overlap_ratio(v.box, abox) >= 0.20) for v in tracked_objects):
+            # 2. Bus Protection: do not inject an ambulance box that overlaps a confirmed giant coach
+            if any(v.class_name == "bus" and (v.box[2]-v.box[0])*(v.box[3]-v.box[1]) >= 80000 and (YOLODetector._compute_iou(v.box, abox) >= 0.15 or YOLODetector._compute_overlap_ratio(v.box, abox) >= 0.20) for v in tracked_objects):
                 continue
 
             matched = any(YOLODetector._compute_iou(v.box, abox) >= 0.30 for v in tracked_objects)

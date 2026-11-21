@@ -53,7 +53,7 @@ class YOLODetector:
         ambulance_weights: Optional[str] = "models/yolov8n_ambulance.pt",
         enable_fine_tuned_ambulance: bool = True,
         confidence_threshold: float = 0.20,
-        ambulance_conf: float = 0.45,
+        ambulance_conf: float = 0.25,
         iou_threshold: float = 0.45,
         target_classes: Optional[List[int]] = None,
         device: str = "cpu"
@@ -231,14 +231,19 @@ class YOLODetector:
                     if any(d.is_emergency and (self._compute_iou(d.box, axyxy) >= 0.15 or self._compute_overlap_ratio(d.box, axyxy) >= 0.25) for d in detections):
                         continue
 
-                    # 2. Bus Protection: NEVER override or convert a bus to an ambulance
-                    # Match only with car or truck chassis (light commercial / van chassis)
+                    # 2. Match with base detections:
+                    # An ambulance van may be detected by base COCO YOLO as 'car', 'truck', or 'bus' (high-roof van chassis).
+                    # A true commercial passenger coach (e.g. Sai Neeta or city transit) has large area and should NOT be overridden.
                     matched_base = False
                     for det in detections:
-                        if det.class_name == "bus":
-                            continue  # Buses are preserved and never overridden
                         iou = self._compute_iou(det.box, [ax1, ay1, ax2, ay2])
-                        if iou >= 0.35:
+                        overlap_rat = self._compute_overlap_ratio(det.box, [ax1, ay1, ax2, ay2])
+                        if iou >= 0.35 or overlap_rat >= 0.50:
+                            # If base class is bus, protect giant commercial coaches (area >= 80000 or width >= 280)
+                            is_giant_coach = (det.class_name == "bus" and (det.width * det.height >= 80000 or det.width >= 280) and iou < 0.65)
+                            if is_giant_coach:
+                                continue  # Protect giant commercial buses
+
                             det.is_emergency = True
                             det.emergency_type = e_label
                             det.class_name = "ambulance"
@@ -246,13 +251,13 @@ class YOLODetector:
                             matched_base = True
                             break
 
-                    # 3. Add standalone ambulance only if it does not overlap a real bus
+                    # 3. Add standalone ambulance if it does not overlap a real giant bus
                     if not matched_base and aconf >= self.confidence_threshold:
-                        overlaps_real_bus = any(
-                            d.class_name == "bus" and d.confidence >= 0.50 and (self._compute_iou(d.box, axyxy) >= 0.15 or self._compute_overlap_ratio(d.box, axyxy) >= 0.20)
+                        overlaps_giant_bus = any(
+                            d.class_name == "bus" and (d.width * d.height >= 80000 or d.width >= 280) and (self._compute_iou(d.box, axyxy) >= 0.15 or self._compute_overlap_ratio(d.box, axyxy) >= 0.20)
                             for d in detections
                         )
-                        if not overlaps_real_bus:
+                        if not overlaps_giant_bus:
                             detections.append(Detection(
                                 box=[ax1, ay1, ax2, ay2],
                                 confidence=aconf,
