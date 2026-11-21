@@ -53,7 +53,7 @@ class YOLODetector:
         ambulance_weights: Optional[str] = "models/yolov8n_ambulance.pt",
         enable_fine_tuned_ambulance: bool = True,
         confidence_threshold: float = 0.20,
-        ambulance_conf: float = 0.75,
+        ambulance_conf: float = 0.50,
         iou_threshold: float = 0.45,
         target_classes: Optional[List[int]] = None,
         device: str = "cpu"
@@ -147,8 +147,8 @@ class YOLODetector:
 
                 class_name = self.COCO_VEHICLE_CLASSES.get(cls_id, self.model.names.get(cls_id, f"cls_{cls_id}"))
 
-                # Large footprint promotion for heavy vehicles
-                if class_name == "car" and (w * h >= 18000) and (w > 130 or h > 110):
+                # Large footprint promotion for heavy vehicles (tall trucks/buses, not flat wide cars)
+                if class_name == "car" and (w * h >= 22000) and (h >= 115) and ((h / float(w)) >= 0.55):
                     class_name = "truck"
 
                 # Direct check if class itself is already emergency
@@ -254,16 +254,17 @@ class YOLODetector:
 
         h, w = roi.shape[:2]
         # Ambulances are medium-to-large high-profile commercial vehicles
-        if h < 40 or w < 40:
+        if h < 45 or w < 45:
             return False, None
 
-        area = w * h
         aspect_ratio = float(h) / float(w)
+        # Ambulances are high-profile van or box chassis; reject low-profile sedans/coupes
+        if aspect_ratio < 0.55:
+            return False, None
 
         # Standard passenger cars (low-slung sedans, hatchbacks) are rejected unless large commercial footprint
         if base_class == "car":
-            # If it's a small or low-profile car, it cannot be an ambulance
-            if area < 14000 or aspect_ratio < 0.60:
+            if (w * h < 14000) or aspect_ratio < 0.60:
                 return False, None
 
         # 1. Roof Beacon / Lightbar Inspection (Top 22% of vehicle)
@@ -284,8 +285,9 @@ class YOLODetector:
         flasher_pixels = red_beacon_px + blue_beacon_px
         flasher_ratio = flasher_pixels / roof_pixels
 
-        # 2. Body Livery & Marking Inspection (Middle/Lower 78% of vehicle)
-        body_roi = roi[roof_h:, :]
+        # 2. Body Livery & Marking Inspection (Middle vehicle body, excluding lowest 12% to suppress wet pavement reflections)
+        ground_cut = max(roof_h + 1, int(h * 0.88))
+        body_roi = roi[roof_h:ground_cut, :]
         body_pixels = float(body_roi.shape[0] * body_roi.shape[1])
         hsv_body = cv2.cvtColor(body_roi, cv2.COLOR_BGR2HSV)
 
@@ -297,15 +299,15 @@ class YOLODetector:
         red_body_mask = ((hsv_body[:, :, 0] <= 10) | (hsv_body[:, :, 0] >= 168)) & (hsv_body[:, :, 1] >= 110) & (hsv_body[:, :, 2] >= 90)
         red_body_ratio = int(np.count_nonzero(red_body_mask)) / body_pixels
 
-        # Decision Criteria (Strict to prevent false positives on white/colored cars):
-        # A. Dual flashing strobes (both red and blue >= 15px) on a predominantly white body (>= 35%)
-        has_dual_beacon = (red_beacon_px >= 15 and blue_beacon_px >= 15 and flasher_ratio >= 0.04 and white_ratio >= 0.35)
+        # Decision Criteria (Strict to prevent false positives on white/colored cars & wet pavement):
+        # A. Dual flashing strobes (both red and blue >= 15px) on a predominantly white body (>= 35%) with emergency markings
+        has_dual_beacon = (red_beacon_px >= 15 and blue_beacon_px >= 15 and flasher_ratio >= 0.04 and white_ratio >= 0.35 and red_body_ratio >= 0.025)
 
-        # B. High-intensity concentrated roof beacon pod (>= 35px) on prominent white body (>= 40%) with emergency markings
-        has_beacon_with_livery = (flasher_pixels >= 25 and flasher_ratio >= 0.05 and white_ratio >= 0.40 and red_body_ratio >= 0.03)
+        # B. High-intensity concentrated roof beacon pod (>= 25px) on prominent white body (>= 40%) with emergency markings
+        has_beacon_with_livery = (flasher_pixels >= 25 and flasher_ratio >= 0.05 and white_ratio >= 0.40 and red_body_ratio >= 0.025)
 
-        # C. Characteristic ambulance livery (high white >= 50% + clear red emergency stripes >= 4%) with roof flasher presence (>= 12px)
-        has_full_ambulance_livery = (white_ratio >= 0.50 and red_body_ratio >= 0.04 and flasher_pixels >= 12)
+        # C. Characteristic ambulance livery (high white >= 45% + clear red emergency stripes >= 3.5%) with roof flasher presence (>= 10px)
+        has_full_ambulance_livery = (white_ratio >= 0.45 and red_body_ratio >= 0.035 and flasher_pixels >= 10)
 
         if has_dual_beacon or has_beacon_with_livery or has_full_ambulance_livery:
             return True, "ambulance"
