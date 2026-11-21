@@ -50,24 +50,59 @@ class YOLODetector:
     def __init__(
         self,
         weights_path: str = "yolov8n.pt",
+        ambulance_weights: Optional[str] = "models/yolov8n_ambulance.pt",
+        enable_fine_tuned_ambulance: bool = True,
         confidence_threshold: float = 0.20,
         iou_threshold: float = 0.45,
         target_classes: Optional[List[int]] = None,
         device: str = "cpu"
     ):
         self.weights_path = weights_path
+        self.ambulance_weights = ambulance_weights
+        self.enable_fine_tuned_ambulance = enable_fine_tuned_ambulance
         self.confidence_threshold = confidence_threshold
         self.iou_threshold = iou_threshold
         self.target_classes = target_classes or list(self.COCO_VEHICLE_CLASSES.keys())
         self.device = device
 
-        # Load YOLO model
+        # Load Base YOLO model (COCO road traffic)
         self.model = YOLO(self.weights_path)
+
+        # Load Fine-Tuned Ambulance Model if available
+        self.ambulance_model = None
+        self.ambulance_model_loaded = False
+        if self.enable_fine_tuned_ambulance and self.ambulance_weights:
+            if os.path.exists(self.ambulance_weights):
+                try:
+                    self.ambulance_model = YOLO(self.ambulance_weights)
+                    self.ambulance_model_loaded = True
+                except Exception as e:
+                    print(f"[YOLODetector] Warning: Could not load {self.ambulance_weights}: {e}")
+
+    @staticmethod
+    def _compute_iou(box1: List[int], box2: List[int]) -> float:
+        """Computes Intersection-over-Union (IoU) between two bounding boxes [x1, y1, x2, y2]."""
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+
+        inter_w = max(0, x2 - x1)
+        inter_h = max(0, y2 - y1)
+        inter_area = inter_w * inter_h
+        if inter_area == 0:
+            return 0.0
+
+        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        union_area = float(area1 + area2 - inter_area)
+        return inter_area / union_area if union_area > 0 else 0.0
 
     def detect(self, frame: np.ndarray) -> List[Detection]:
         """
         Runs YOLOv8n inference on frame and returns filtered vehicle detections.
         Applies sensitive thresholding to avoid dropping trucks and heavy vehicles.
+        Integrates fine-tuned neural ambulance detection with spatial IoU fusion.
         """
         if frame is None:
             return []
@@ -91,62 +126,115 @@ class YOLODetector:
         r = results[0]
         boxes = r.boxes
 
-        if boxes is None or len(boxes) == 0:
-            return detections
+        if boxes is not None and len(boxes) > 0:
+            for box in boxes:
+                cls_id = int(box.cls[0].item())
+                conf = float(box.conf[0].item())
+                xyxy = box.xyxy[0].cpu().numpy().astype(int)
+                x1, y1, x2, y2 = xyxy.tolist()
 
-        for box in boxes:
-            cls_id = int(box.cls[0].item())
-            conf = float(box.conf[0].item())
-            xyxy = box.xyxy[0].cpu().numpy().astype(int)
-            x1, y1, x2, y2 = xyxy.tolist()
+                # Heavy vehicles (truck / bus / hauler) are retained down to inference_conf
+                is_heavy_class = cls_id in (5, 6, 7)
+                if not is_heavy_class and conf < self.confidence_threshold:
+                    continue
 
-            # Heavy vehicles (truck / bus / hauler) are retained down to inference_conf
-            # Standard vehicles must meet self.confidence_threshold
-            is_heavy_class = cls_id in (5, 6, 7)
-            if not is_heavy_class and conf < self.confidence_threshold:
-                continue
+                cx = int((x1 + x2) / 2.0)
+                cy = int((y1 + y2) / 2.0)
+                w = x2 - x1
+                h = y2 - y1
 
-            cx = int((x1 + x2) / 2.0)
-            cy = int((y1 + y2) / 2.0)
-            w = x2 - x1
-            h = y2 - y1
+                class_name = self.COCO_VEHICLE_CLASSES.get(cls_id, self.model.names.get(cls_id, f"cls_{cls_id}"))
 
-            class_name = self.COCO_VEHICLE_CLASSES.get(cls_id, self.model.names.get(cls_id, f"cls_{cls_id}"))
+                # Large footprint promotion for heavy vehicles
+                if class_name == "car" and (w * h >= 18000) and (w > 130 or h > 110):
+                    class_name = "truck"
 
-            # Large footprint promotion for heavy vehicles
-            if class_name == "car" and (w * h >= 18000) and (w > 130 or h > 110):
-                class_name = "truck"
+                # Direct check if class itself is already emergency
+                is_emergency = class_name in ("ambulance", "police", "firetruck")
+                emergency_type = class_name if is_emergency else None
 
-            # Emergency Vehicle (Ambulance) visual heuristic check
-            is_emergency = False
-            emergency_type = None
+                detections.append(Detection(
+                    box=[x1, y1, x2, y2],
+                    confidence=conf,
+                    class_id=cls_id,
+                    class_name=class_name,
+                    center=(cx, cy),
+                    width=w,
+                    height=h,
+                    is_emergency=is_emergency,
+                    emergency_type=emergency_type
+                ))
 
-            if class_name in ("ambulance", "police", "firetruck"):
-                is_emergency = True
-                emergency_type = class_name
-            elif class_name in ("car", "truck", "bus"):
+        # ------------------------------------------------------------------ #
+        # Step 2: Fine-Tuned Neural Ambulance Detector & Spatial Fusion      #
+        # ------------------------------------------------------------------ #
+        if self.ambulance_model_loaded and self.ambulance_model is not None:
+            amb_results = self.ambulance_model.predict(
+                source=frame,
+                conf=max(0.20, inference_conf),
+                iou=self.iou_threshold,
+                device=self.device,
+                verbose=False
+            )
+
+            if amb_results and len(amb_results) > 0 and amb_results[0].boxes is not None:
+                amb_boxes = amb_results[0].boxes
+                for abox in amb_boxes:
+                    acls_id = int(abox.cls[0].item())
+                    aconf = float(abox.conf[0].item())
+                    axyxy = abox.xyxy[0].cpu().numpy().astype(int)
+                    ax1, ay1, ax2, ay2 = axyxy.tolist()
+                    acx = int((ax1 + ax2) / 2.0)
+                    acy = int((ay1 + ay2) / 2.0)
+                    aw = ax2 - ax1
+                    ah = ay2 - ay1
+
+                    # 0: ambulance, 1: fire_truck
+                    e_label = "fire_truck" if acls_id == 1 else "ambulance"
+
+                    # Check if this fine-tuned detection overlaps with an existing base vehicle box
+                    matched_base = False
+                    for det in detections:
+                        iou = self._compute_iou(det.box, [ax1, ay1, ax2, ay2])
+                        if iou >= 0.35:
+                            # Promote base vehicle to emergency ambulance with neural confidence
+                            det.is_emergency = True
+                            det.emergency_type = e_label
+                            det.class_name = "ambulance"
+                            det.confidence = max(det.confidence, aconf)
+                            matched_base = True
+                            break
+
+                    # If not overlapping any existing base vehicle, add as a new standalone ambulance detection
+                    if not matched_base and aconf >= self.confidence_threshold:
+                        detections.append(Detection(
+                            box=[ax1, ay1, ax2, ay2],
+                            confidence=aconf,
+                            class_id=acls_id,
+                            class_name="ambulance",
+                            center=(acx, acy),
+                            width=aw,
+                            height=ah,
+                            is_emergency=True,
+                            emergency_type=e_label
+                        ))
+
+        # ------------------------------------------------------------------ #
+        # Step 3: Heuristic Fallback Check (for vehicles not yet promoted)   #
+        # ------------------------------------------------------------------ #
+        for det in detections:
+            if not det.is_emergency and det.class_name in ("car", "truck", "bus"):
+                x1, y1, x2, y2 = det.box
                 fh, fw = frame.shape[:2]
                 rx1, ry1 = max(0, x1), max(0, y1)
                 rx2, ry2 = min(fw, x2), min(fh, y2)
                 if (rx2 - rx1 >= 24) and (ry2 - ry1 >= 24):
                     roi = frame[ry1:ry2, rx1:rx2]
-                    is_emerg, e_type = self.classify_emergency_vehicle(roi, class_name)
+                    is_emerg, e_type = self.classify_emergency_vehicle(roi, det.class_name)
                     if is_emerg:
-                        is_emergency = True
-                        emergency_type = e_type
-                        class_name = "ambulance"
-
-            detections.append(Detection(
-                box=[x1, y1, x2, y2],
-                confidence=conf,
-                class_id=cls_id,
-                class_name=class_name,
-                center=(cx, cy),
-                width=w,
-                height=h,
-                is_emergency=is_emergency,
-                emergency_type=emergency_type
-            ))
+                        det.is_emergency = True
+                        det.emergency_type = e_type
+                        det.class_name = "ambulance"
 
         return detections
 

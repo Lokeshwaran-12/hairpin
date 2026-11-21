@@ -80,9 +80,22 @@ class VehicleTracker:
         conf: float = 0.18,
         iou: float = 0.45,
         target_classes: Optional[List[int]] = None,
-        device: str = "cpu"
+        device: str = "cpu",
+        ambulance_weights: Optional[str] = "models/yolov8n_ambulance.pt",
+        enable_fine_tuned_ambulance: bool = True
     ):
         self.model = YOLO(model_path)
+        self.ambulance_weights = ambulance_weights
+        self.enable_fine_tuned_ambulance = enable_fine_tuned_ambulance
+        self.ambulance_model = None
+        self.ambulance_model_loaded = False
+
+        if self.enable_fine_tuned_ambulance and self.ambulance_weights and os.path.exists(self.ambulance_weights):
+            try:
+                self.ambulance_model = YOLO(self.ambulance_weights)
+                self.ambulance_model_loaded = True
+            except Exception:
+                pass
         if tracker_type is None or tracker_type == "bytetrack.yaml":
             self.tracker_type = _get_custom_tracker_config()
         else:
@@ -261,7 +274,23 @@ class VehicleTracker:
                 rx2, ry2 = min(fw, sx2), min(fh, sy2)
                 if (rx2 - rx1 >= 24) and (ry2 - ry1 >= 24):
                     roi = frame[ry1:ry2, rx1:rx2]
-                    detected_emerg, e_type = YOLODetector.classify_emergency_vehicle(roi, cls_name)
+                    detected_emerg = False
+                    e_type = None
+
+                    # If fine-tuned ambulance neural model is loaded, check ROI with model
+                    if self.ambulance_model_loaded and self.ambulance_model is not None:
+                        try:
+                            amb_pred = self.ambulance_model.predict(source=roi, conf=0.25, verbose=False)
+                            if amb_pred and len(amb_pred) > 0 and len(amb_pred[0].boxes) > 0:
+                                detected_emerg = True
+                                e_type = "ambulance"
+                        except Exception:
+                            pass
+
+                    # Fallback to heuristic classifier
+                    if not detected_emerg:
+                        detected_emerg, e_type = YOLODetector.classify_emergency_vehicle(roi, cls_name)
+
                     if detected_emerg:
                         is_emergency = True
                         emergency_type_val = e_type

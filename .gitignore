@@ -24,8 +24,12 @@ pnpm-debug.log*
 *.pt
 *.onnx
 *.engine
+runs/
+models/*.pt
+!models/.gitkeep
 
 # Dynamic Runtime Data, Datasets & Large Video Files
+Ambulance.v1i.tensorflow/
 data/datasets/
 data/uploaded_videos/
 data/snapshots/*

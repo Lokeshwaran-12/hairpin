@@ -55,7 +55,14 @@ if os.path.exists(config_path):
         cfg = yaml.safe_load(f)
 
 # Global models and utilities
-detector_model = YOLODetector(weights_path="yolov8n.pt", confidence_threshold=0.20)
+model_cfg = cfg.get("model", {})
+detector_model = YOLODetector(
+    weights_path=model_cfg.get("weights", "yolov8n.pt"),
+    ambulance_weights=model_cfg.get("ambulance_weights", "models/yolov8n_ambulance.pt"),
+    enable_fine_tuned_ambulance=model_cfg.get("enable_fine_tuned_ambulance", True),
+    confidence_threshold=model_cfg.get("confidence", 0.20),
+    iou_threshold=model_cfg.get("iou_threshold", 0.45)
+)
 preprocessor = FramePreprocessor(enable_clahe=True)
 visualizer = HUDVisualizer(show_zones=True, show_trajectories=True)
 predictor = CollisionPredictor(zones_config=cfg.get("zones", {}))
@@ -722,12 +729,18 @@ async def upload_video_direct(file: UploadFile = File(...)):
 
 @app.get("/api/video/status")
 def get_video_status():
-    """Returns current active video stream status."""
+    """Returns current active video stream status and model info."""
     return {
         "is_running": stream_manager.is_running,
         "video_name": stream_manager.video_name,
         "is_custom_video": stream_manager.source != "synthetic",
-        "source": stream_manager.source
+        "source": stream_manager.source,
+        "model_info": {
+            "base_weights": detector_model.weights_path,
+            "ambulance_weights": detector_model.ambulance_weights,
+            "ambulance_model_loaded": detector_model.ambulance_model_loaded,
+            "mode": "hybrid_dual_head" if detector_model.ambulance_model_loaded else "standard_with_heuristic_fallback"
+        }
     }
 
 
