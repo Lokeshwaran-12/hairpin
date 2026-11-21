@@ -100,6 +100,25 @@ class YOLODetector:
         union_area = float(area1 + area2 - inter_area)
         return inter_area / union_area if union_area > 0 else 0.0
 
+    @staticmethod
+    def _compute_overlap_ratio(box1: List[int], box2: List[int]) -> float:
+        """Computes intersection area over min area between two bounding boxes."""
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+
+        inter_w = max(0, x2 - x1)
+        inter_h = max(0, y2 - y1)
+        inter_area = inter_w * inter_h
+        if inter_area == 0:
+            return 0.0
+
+        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        min_area = min(area1, area2)
+        return float(inter_area) / float(min_area) if min_area > 0 else 0.0
+
     def detect(self, frame: np.ndarray) -> List[Detection]:
         """
         Runs YOLOv8n inference on frame and returns filtered vehicle detections.
@@ -181,13 +200,13 @@ class YOLODetector:
             )
 
             if amb_results and len(amb_results) > 0 and amb_results[0].boxes is not None:
-                amb_boxes = amb_results[0].boxes
+                amb_boxes = []
                 fh, fw = frame.shape[:2]
-                for abox in amb_boxes:
+                for abox in amb_results[0].boxes:
                     acls_id = int(abox.cls[0].item())
                     aconf = float(abox.conf[0].item())
-                    axyxy = abox.xyxy[0].cpu().numpy().astype(int)
-                    ax1, ay1, ax2, ay2 = axyxy.tolist()
+                    axyxy = abox.xyxy[0].cpu().numpy().astype(int).tolist()
+                    ax1, ay1, ax2, ay2 = axyxy
 
                     # False-positive filter: verify genuine emergency features (beacon strobes / emergency livery)
                     roi_candidate = frame[max(0, ay1):min(fh, ay2), max(0, ax1):min(fw, ax2)]
@@ -195,20 +214,31 @@ class YOLODetector:
                     if not is_valid_emerg:
                         continue  # Rejects ordinary civilian cars, SUVs, and white vans
 
+                    amb_boxes.append((axyxy, acls_id, aconf))
+
+                # Process candidates in descending order of confidence
+                amb_boxes.sort(key=lambda x: x[2], reverse=True)
+
+                for axyxy, acls_id, aconf in amb_boxes:
+                    ax1, ay1, ax2, ay2 = axyxy
                     acx = int((ax1 + ax2) / 2.0)
                     acy = int((ay1 + ay2) / 2.0)
                     aw = ax2 - ax1
                     ah = ay2 - ay1
-
-                    # 0: ambulance, 1: fire_truck
                     e_label = "fire_truck" if acls_id == 1 else "ambulance"
 
-                    # Check if this fine-tuned detection overlaps with an existing base vehicle box
+                    # 1. Duplicate Suppression: Skip if another confirmed ambulance already covers this region
+                    if any(d.is_emergency and (self._compute_iou(d.box, axyxy) >= 0.15 or self._compute_overlap_ratio(d.box, axyxy) >= 0.25) for d in detections):
+                        continue
+
+                    # 2. Bus Protection: NEVER override or convert a bus to an ambulance
+                    # Match only with car or truck chassis (light commercial / van chassis)
                     matched_base = False
                     for det in detections:
+                        if det.class_name == "bus":
+                            continue  # Buses are preserved and never overridden
                         iou = self._compute_iou(det.box, [ax1, ay1, ax2, ay2])
                         if iou >= 0.35:
-                            # Promote base vehicle to emergency ambulance with neural confidence
                             det.is_emergency = True
                             det.emergency_type = e_label
                             det.class_name = "ambulance"
@@ -216,19 +246,24 @@ class YOLODetector:
                             matched_base = True
                             break
 
-                    # If not overlapping any existing base vehicle, add as a new standalone ambulance detection
+                    # 3. Add standalone ambulance only if it does not overlap a real bus
                     if not matched_base and aconf >= self.confidence_threshold:
-                        detections.append(Detection(
-                            box=[ax1, ay1, ax2, ay2],
-                            confidence=aconf,
-                            class_id=acls_id,
-                            class_name="ambulance",
-                            center=(acx, acy),
-                            width=aw,
-                            height=ah,
-                            is_emergency=True,
-                            emergency_type=e_label
-                        ))
+                        overlaps_real_bus = any(
+                            d.class_name == "bus" and d.confidence >= 0.50 and (self._compute_iou(d.box, axyxy) >= 0.15 or self._compute_overlap_ratio(d.box, axyxy) >= 0.20)
+                            for d in detections
+                        )
+                        if not overlaps_real_bus:
+                            detections.append(Detection(
+                                box=[ax1, ay1, ax2, ay2],
+                                confidence=aconf,
+                                class_id=acls_id,
+                                class_name="ambulance",
+                                center=(acx, acy),
+                                width=aw,
+                                height=ah,
+                                is_emergency=True,
+                                emergency_type=e_label
+                            ))
 
         # ------------------------------------------------------------------ #
         # Step 3: Heuristic Fallback Check (ONLY if neural ambulance weights #

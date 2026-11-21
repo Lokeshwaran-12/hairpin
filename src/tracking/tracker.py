@@ -308,7 +308,7 @@ class VehicleTracker:
                 is_emergency = True
                 emergency_type_val = self.emergency_tracks[track_id]
                 cls_name = "ambulance"
-            elif cls_name in ("car", "truck", "bus"):
+            elif cls_name in ("car", "truck"):  # Bus is protected and never converted to ambulance
                 detected_emerg = False
                 e_type = None
 
@@ -362,6 +362,13 @@ class VehicleTracker:
 
         # Standalone ambulance injection: any high-confidence ambulance not matched to base YOLO tracks
         for abox, alabel, aconf in full_frame_amb_boxes:
+            # 1. Skip duplicate if another confirmed ambulance already covers this region
+            if any(v.is_emergency and (YOLODetector._compute_iou(v.box, abox) >= 0.15 or YOLODetector._compute_overlap_ratio(v.box, abox) >= 0.25) for v in tracked_objects):
+                continue
+            # 2. Bus Protection: do not inject an ambulance box that overlaps a confirmed real bus
+            if any(v.class_name == "bus" and (YOLODetector._compute_iou(v.box, abox) >= 0.15 or YOLODetector._compute_overlap_ratio(v.box, abox) >= 0.20) for v in tracked_objects):
+                continue
+
             matched = any(YOLODetector._compute_iou(v.box, abox) >= 0.30 for v in tracked_objects)
             if not matched:
                 ax1, ay1, ax2, ay2 = abox
