@@ -78,8 +78,7 @@ class VideoStreamSource:
 
     def read(self) -> Tuple[bool, Optional[np.ndarray]]:
         """
-        Reads next frame.
-        For video files, synchronizes playback with wall-clock time to run at real-time 1.0x speed.
+        Reads next frame smoothly without teleportation jumps, ensuring continuous tracking accuracy.
         """
         if self.is_synthetic:
             return self.sim_feed.read()
@@ -92,27 +91,15 @@ class VideoStreamSource:
         if not self.cap or not self.cap.isOpened():
             return False, None
 
-        # Synchronize video files to real-time playback
-        if self.is_video_file and self.total_frames > 1 and self.video_fps > 0:
-            elapsed = time.time() - self._playback_start_time
-            target_frame = int(elapsed * self.video_fps) % self.total_frames
-            current_pos = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
-
-            if target_frame > current_pos:
-                diff = target_frame - current_pos
-                if diff <= 8:
-                    for _ in range(diff - 1):
-                        self.cap.grab()
-                else:
-                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
-            elif target_frame < current_pos and (current_pos - target_frame) > 10:
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+        # Gentle normalization for ultra-high FPS video (e.g. 60 FPS -> smooth 30 FPS cadence)
+        if self.is_video_file and self.cap:
+            if getattr(self, "video_fps", 30.0) >= 50.0:
+                self.cap.grab()
 
         ret, frame = self.cap.read()
         if not ret:
             # End of video file: automatically loop back for continuous monitoring
             if self.is_video_file:
-                self._playback_start_time = time.time()
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 ret, frame = self.cap.read()
 

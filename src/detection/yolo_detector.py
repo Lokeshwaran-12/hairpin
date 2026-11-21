@@ -53,7 +53,7 @@ class YOLODetector:
         ambulance_weights: Optional[str] = "models/yolov8n_ambulance.pt",
         enable_fine_tuned_ambulance: bool = True,
         confidence_threshold: float = 0.20,
-        ambulance_conf: float = 0.50,
+        ambulance_conf: float = 0.45,
         iou_threshold: float = 0.45,
         target_classes: Optional[List[int]] = None,
         device: str = "cpu"
@@ -173,6 +173,7 @@ class YOLODetector:
         if self.ambulance_model_loaded and self.ambulance_model is not None:
             amb_results = self.ambulance_model.predict(
                 source=frame,
+                imgsz=640,
                 conf=self.ambulance_conf,
                 iou=self.iou_threshold,
                 device=self.device,
@@ -181,11 +182,19 @@ class YOLODetector:
 
             if amb_results and len(amb_results) > 0 and amb_results[0].boxes is not None:
                 amb_boxes = amb_results[0].boxes
+                fh, fw = frame.shape[:2]
                 for abox in amb_boxes:
                     acls_id = int(abox.cls[0].item())
                     aconf = float(abox.conf[0].item())
                     axyxy = abox.xyxy[0].cpu().numpy().astype(int)
                     ax1, ay1, ax2, ay2 = axyxy.tolist()
+
+                    # False-positive filter: verify genuine emergency features (beacon strobes / emergency livery)
+                    roi_candidate = frame[max(0, ay1):min(fh, ay2), max(0, ax1):min(fw, ax2)]
+                    is_valid_emerg, _ = self.classify_emergency_vehicle(roi_candidate, "car")
+                    if not is_valid_emerg:
+                        continue  # Rejects ordinary civilian cars, SUVs, and white vans
+
                     acx = int((ax1 + ax2) / 2.0)
                     acy = int((ay1 + ay2) / 2.0)
                     aw = ax2 - ax1
@@ -222,70 +231,57 @@ class YOLODetector:
                         ))
 
         # ------------------------------------------------------------------ #
-        # Step 3: Heuristic Fallback Check (for vehicles not yet promoted)   #
+        # Step 3: Heuristic Fallback Check (ONLY if neural ambulance weights #
+        # are not loaded, to avoid false positives on brake lights)          #
         # ------------------------------------------------------------------ #
-        for det in detections:
-            if not det.is_emergency and det.class_name in ("car", "truck", "bus"):
-                x1, y1, x2, y2 = det.box
-                fh, fw = frame.shape[:2]
-                rx1, ry1 = max(0, x1), max(0, y1)
-                rx2, ry2 = min(fw, x2), min(fh, y2)
-                if (rx2 - rx1 >= 24) and (ry2 - ry1 >= 24):
-                    roi = frame[ry1:ry2, rx1:rx2]
-                    is_emerg, e_type = self.classify_emergency_vehicle(roi, det.class_name)
-                    if is_emerg:
-                        det.is_emergency = True
-                        det.emergency_type = e_type
-                        det.class_name = "ambulance"
+        if not self.ambulance_model_loaded:
+            for det in detections:
+                if not det.is_emergency and det.class_name in ("car", "truck", "bus"):
+                    x1, y1, x2, y2 = det.box
+                    fh, fw = frame.shape[:2]
+                    rx1, ry1 = max(0, x1), max(0, y1)
+                    rx2, ry2 = min(fw, x2), min(fh, y2)
+                    if (rx2 - rx1 >= 24) and (ry2 - ry1 >= 24):
+                        roi = frame[ry1:ry2, rx1:rx2]
+                        is_emerg, e_type = self.classify_emergency_vehicle(roi, det.class_name)
+                        if is_emerg:
+                            det.is_emergency = True
+                            det.emergency_type = e_type
+                            det.class_name = "ambulance"
 
         return detections
 
     @staticmethod
     def classify_emergency_vehicle(roi: np.ndarray, base_class: str = "car") -> Tuple[bool, Optional[str]]:
         """
-        Visual heuristic classifier for ambulances and emergency response vehicles.
-        Rejects ordinary passenger cars (sedans, hatchbacks, coupes) and requires:
-          1. Geometry & Size: High-top van / box chassis (not low-profile passenger cars).
-          2. Concentrated Roof Lightbar: High saturation dual strobe (red & blue) on top 22% of roof.
-          3. Prominent White Livery with Emergency Accent: High white reflectance (>=40%) with emergency red marking (>=3.5%).
+        Visual emergency classifier for ambulances and emergency response vehicles.
+        Rejects ordinary civilian passenger cars (sedans, SUVs, hatchbacks) and requires:
+          1. Genuine Red Beacon / Strobe on roof (top 22%): red_beacon_px >= 8
+          2. Dual Red & Blue Strobes: red_beacon_px >= 4 and blue_beacon_px >= 10
+          3. Prominent Red Emergency Markings / Cross on white body: red_body_ratio >= 0.020 and white_ratio >= 0.30
         """
         if roi is None or roi.size == 0:
             return False, None
 
         h, w = roi.shape[:2]
-        # Ambulances are medium-to-large high-profile commercial vehicles
-        if h < 45 or w < 45:
+        if h < 24 or w < 24:
             return False, None
-
-        aspect_ratio = float(h) / float(w)
-        # Ambulances are high-profile van or box chassis; reject low-profile sedans/coupes
-        if aspect_ratio < 0.55:
-            return False, None
-
-        # Standard passenger cars (low-slung sedans, hatchbacks) are rejected unless large commercial footprint
-        if base_class == "car":
-            if (w * h < 14000) or aspect_ratio < 0.60:
-                return False, None
 
         # 1. Roof Beacon / Lightbar Inspection (Top 22% of vehicle)
-        roof_h = max(6, int(h * 0.22))
+        roof_h = max(5, int(h * 0.22))
         roof_roi = roi[0:roof_h, :]
         hsv_roof = cv2.cvtColor(roof_roi, cv2.COLOR_BGR2HSV)
-        roof_pixels = float(roof_roi.shape[0] * roof_roi.shape[1])
 
-        # Highly saturated red strobes (S >= 120, V >= 120) to reject dull paint/reflections
-        red_mask_1 = (hsv_roof[:, :, 0] <= 10) & (hsv_roof[:, :, 1] >= 120) & (hsv_roof[:, :, 2] >= 120)
-        red_mask_2 = (hsv_roof[:, :, 0] >= 168) & (hsv_roof[:, :, 1] >= 120) & (hsv_roof[:, :, 2] >= 120)
+        # Highly saturated red strobes (S >= 110, V >= 110)
+        red_mask_1 = (hsv_roof[:, :, 0] <= 10) & (hsv_roof[:, :, 1] >= 110) & (hsv_roof[:, :, 2] >= 110)
+        red_mask_2 = (hsv_roof[:, :, 0] >= 168) & (hsv_roof[:, :, 1] >= 110) & (hsv_roof[:, :, 2] >= 110)
         red_beacon_px = int(np.count_nonzero(red_mask_1 | red_mask_2))
 
-        # Highly saturated blue strobes (hue 102-128, S >= 120, V >= 120) to reject sky / windshield tint
-        blue_mask = (hsv_roof[:, :, 0] >= 102) & (hsv_roof[:, :, 0] <= 128) & (hsv_roof[:, :, 1] >= 120) & (hsv_roof[:, :, 2] >= 120)
+        # Highly saturated blue strobes (hue 102-128, S >= 110, V >= 110)
+        blue_mask = (hsv_roof[:, :, 0] >= 102) & (hsv_roof[:, :, 0] <= 128) & (hsv_roof[:, :, 1] >= 110) & (hsv_roof[:, :, 2] >= 110)
         blue_beacon_px = int(np.count_nonzero(blue_mask))
 
-        flasher_pixels = red_beacon_px + blue_beacon_px
-        flasher_ratio = flasher_pixels / roof_pixels
-
-        # 2. Body Livery & Marking Inspection (Middle vehicle body, excluding lowest 12% to suppress wet pavement reflections)
+        # 2. Body Livery & Marking Inspection (Middle vehicle body)
         ground_cut = max(roof_h + 1, int(h * 0.88))
         body_roi = roi[roof_h:ground_cut, :]
         body_pixels = float(body_roi.shape[0] * body_roi.shape[1])
@@ -299,17 +295,15 @@ class YOLODetector:
         red_body_mask = ((hsv_body[:, :, 0] <= 10) | (hsv_body[:, :, 0] >= 168)) & (hsv_body[:, :, 1] >= 110) & (hsv_body[:, :, 2] >= 90)
         red_body_ratio = int(np.count_nonzero(red_body_mask)) / body_pixels
 
-        # Decision Criteria (Strict to prevent false positives on white/colored cars & wet pavement):
-        # A. Dual flashing strobes (both red and blue >= 15px) on a predominantly white body (>= 35%) with emergency markings
-        has_dual_beacon = (red_beacon_px >= 15 and blue_beacon_px >= 15 and flasher_ratio >= 0.04 and white_ratio >= 0.35 and red_body_ratio >= 0.025)
+        # Genuine emergency criteria:
+        # 1. Dedicated red beacon (>= 10px on roof)
+        # 2. Dual red + blue lightbar (red >= 10 and blue >= 12)
+        # 3. Emergency livery with roof beacon presence (white >= 0.24, red livery >= 0.015, red beacon >= 10)
+        has_dedicated_red_beacon = (red_beacon_px >= 10)
+        has_dual_beacon = (red_beacon_px >= 10 and blue_beacon_px >= 12)
+        has_livery_with_beacon = (white_ratio >= 0.24 and red_body_ratio >= 0.015 and red_beacon_px >= 10)
 
-        # B. High-intensity concentrated roof beacon pod (>= 25px) on prominent white body (>= 40%) with emergency markings
-        has_beacon_with_livery = (flasher_pixels >= 25 and flasher_ratio >= 0.05 and white_ratio >= 0.40 and red_body_ratio >= 0.025)
-
-        # C. Characteristic ambulance livery (high white >= 45% + clear red emergency stripes >= 3.5%) with roof flasher presence (>= 10px)
-        has_full_ambulance_livery = (white_ratio >= 0.45 and red_body_ratio >= 0.035 and flasher_pixels >= 10)
-
-        if has_dual_beacon or has_beacon_with_livery or has_full_ambulance_livery:
+        if has_dedicated_red_beacon or has_dual_beacon or has_livery_with_beacon:
             return True, "ambulance"
 
         return False, None

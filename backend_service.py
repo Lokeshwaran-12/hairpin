@@ -177,6 +177,7 @@ class StreamManager:
                 time.sleep(0.05)
                 continue
 
+            t_loop_start = time.time()
             try:
                 ret, frame = self.stream.read()
                 if not ret or frame is None:
@@ -283,7 +284,11 @@ class StreamManager:
             except Exception as e:
                 print(f"[Worker Error] Exception during frame processing: {e}")
 
-            time.sleep(0.005)  # Responsive non-blocking cadence
+            # Natural, controlled video playback pacing (approx 25-28 FPS, no runaway hyper-speed)
+            t_elapsed = time.time() - t_loop_start
+            target_cadence = (1.0 / 28.0) if getattr(self.stream, "is_video_file", False) else 0.02
+            sleep_duration = max(0.005, target_cadence - t_elapsed)
+            time.sleep(sleep_duration)
 
 stream_manager = StreamManager()
 
@@ -545,7 +550,7 @@ def stream_feed():
                 if ret:
                     yield (b"--frame\r\n"
                            b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n\r\n")
-            time.sleep(0.02)
+            time.sleep(0.033)  # ~30 FPS stream delivery
 
     return StreamingResponse(_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
 

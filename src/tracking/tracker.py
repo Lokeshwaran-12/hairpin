@@ -83,7 +83,7 @@ class VehicleTracker:
         device: str = "cpu",
         ambulance_weights: Optional[str] = "models/yolov8n_ambulance.pt",
         enable_fine_tuned_ambulance: bool = True,
-        imgsz: int = 480
+        imgsz: int = 640
     ):
         self.model = YOLO(model_path)
         self.ambulance_weights = ambulance_weights
@@ -167,31 +167,37 @@ class VehicleTracker:
 
         self.frame_idx += 1
 
-        # 1. Full-Frame Fine-Tuned Ambulance Detection (cadence optimization for smooth real-time video)
+        # 1. Full-Frame Fine-Tuned Ambulance Detection (executed every frame for maximum accuracy)
         full_frame_amb_boxes: List[Tuple[List[int], str, float]] = []
         if self.ambulance_model_loaded and self.ambulance_model is not None:
-            if (self.frame_idx % 2 == 1) or not self._last_amb_boxes:
-                try:
-                    amb_res = self.ambulance_model.predict(
-                        source=frame,
-                        imgsz=self.imgsz,
-                        conf=0.50,
-                        iou=self.iou,
-                        device=self.device,
-                        verbose=False
-                    )
-                    if amb_res and len(amb_res) > 0 and amb_res[0].boxes is not None:
-                        boxes_out = []
-                        for abox in amb_res[0].boxes:
-                            acls_id = int(abox.cls[0].item())
-                            aconf = float(abox.conf[0].item())
-                            axyxy = abox.xyxy[0].cpu().numpy().astype(int).tolist()
-                            alabel = "fire_truck" if acls_id == 1 else "ambulance"
-                            boxes_out.append((axyxy, alabel, aconf))
-                        self._last_amb_boxes = boxes_out
-                except Exception:
-                    pass
-            full_frame_amb_boxes = list(self._last_amb_boxes)
+            try:
+                amb_res = self.ambulance_model.predict(
+                    source=frame,
+                    imgsz=self.imgsz,
+                    conf=0.45,
+                    iou=self.iou,
+                    device=self.device,
+                    verbose=False
+                )
+                if amb_res and len(amb_res) > 0 and amb_res[0].boxes is not None:
+                    fh, fw = frame.shape[:2]
+                    for abox in amb_res[0].boxes:
+                        acls_id = int(abox.cls[0].item())
+                        aconf = float(abox.conf[0].item())
+                        axyxy = abox.xyxy[0].cpu().numpy().astype(int).tolist()
+                        ax1, ay1, ax2, ay2 = axyxy
+
+                        # Reject false-positive ordinary cars, SUVs, and white vans
+                        roi_candidate = frame[max(0, ay1):min(fh, ay2), max(0, ax1):min(fw, ax2)]
+                        is_valid_emerg, _ = YOLODetector.classify_emergency_vehicle(roi_candidate, "car")
+                        if not is_valid_emerg:
+                            continue
+
+                        alabel = "fire_truck" if acls_id == 1 else "ambulance"
+                        full_frame_amb_boxes.append((axyxy, alabel, aconf))
+                    self._last_amb_boxes = list(full_frame_amb_boxes)
+            except Exception:
+                pass
 
         results = self.model.track(
             source=frame,
@@ -308,16 +314,18 @@ class VehicleTracker:
 
                 # Match with full-frame neural ambulance detections using spatial IoU
                 current_box = [sx1, sy1, sx2, sy2]
+                matched_neural_box = False
                 for abox, alabel, aconf in full_frame_amb_boxes:
                     iou_val = YOLODetector._compute_iou(current_box, abox)
                     if iou_val >= 0.35:
                         detected_emerg = True
+                        matched_neural_box = True
                         e_type = alabel
                         conf_val = max(conf_val, aconf)
                         break
 
-                # Fallback to visual livery / beacon classifier if not detected by neural head
-                if not detected_emerg:
+                # Fallback to visual livery / beacon classifier ONLY if neural weights not loaded
+                if not detected_emerg and not self.ambulance_model_loaded:
                     fh, fw = frame.shape[:2]
                     rx1, ry1 = max(0, sx1), max(0, sy1)
                     rx2, ry2 = min(fw, sx2), min(fh, sy2)
@@ -327,8 +335,8 @@ class VehicleTracker:
 
                 if detected_emerg:
                     self.emergency_hits[track_id] = self.emergency_hits.get(track_id, 0) + 1
-                    # Multi-frame confirmation across 2 frames to prevent transient video flicker
-                    if self.emergency_hits[track_id] >= 2:
+                    # Instant confirmation if detected by neural fine-tuned model, or 2 hits for heuristic
+                    if matched_neural_box or self.emergency_hits[track_id] >= 2:
                         is_emergency = True
                         emergency_type_val = e_type
                         cls_name = "ambulance"
@@ -351,6 +359,43 @@ class VehicleTracker:
                 emergency_type=emergency_type_val
             )
             tracked_objects.append(vehicle)
+
+        # Standalone ambulance injection: any high-confidence ambulance not matched to base YOLO tracks
+        for abox, alabel, aconf in full_frame_amb_boxes:
+            matched = any(YOLODetector._compute_iou(v.box, abox) >= 0.30 for v in tracked_objects)
+            if not matched:
+                ax1, ay1, ax2, ay2 = abox
+                acx = int((ax1 + ax2) / 2.0)
+                acy = int((ay1 + ay2) / 2.0)
+                amb_track_id = self._match_or_create_fallback_id(ax1, ay1, ax2, ay2)
+                current_frame_ids.add(amb_track_id)
+                self.emergency_tracks[amb_track_id] = alabel
+                self.emergency_hits[amb_track_id] = self.emergency_hits.get(amb_track_id, 0) + 2
+
+                if amb_track_id not in self.track_histories:
+                    self.track_histories[amb_track_id] = deque(maxlen=self.history_len)
+                    self.speed_histories[amb_track_id] = deque(maxlen=10)
+                    self.track_counts[amb_track_id] = 0
+
+                self.track_histories[amb_track_id].append((acx, acy))
+                self.track_counts[amb_track_id] += 1
+
+                tracked_objects.append(TrackedVehicle(
+                    track_id=amb_track_id,
+                    class_id=0,
+                    class_name="ambulance",
+                    confidence=aconf,
+                    box=[ax1, ay1, ax2, ay2],
+                    center=(acx, acy),
+                    history=list(self.track_histories[amb_track_id]),
+                    velocity_vector=(0.0, 0.0),
+                    speed_kmh=30.0,
+                    heading_deg=0.0,
+                    frames_tracked=self.track_counts[amb_track_id],
+                    is_heavy_vehicle=False,
+                    is_emergency=True,
+                    emergency_type=alabel
+                ))
 
         # Cleanup tracks that disappeared for > 60 frames
         self._fallback_tracks = {
