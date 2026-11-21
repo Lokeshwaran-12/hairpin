@@ -161,6 +161,27 @@ class VehicleTracker:
         if frame is None:
             return []
 
+        # 1. Full-Frame Fine-Tuned Ambulance Detection (runs once per frame on full frame)
+        full_frame_amb_boxes: List[Tuple[List[int], str, float]] = []
+        if self.ambulance_model_loaded and self.ambulance_model is not None:
+            try:
+                amb_res = self.ambulance_model.predict(
+                    source=frame,
+                    conf=0.50,
+                    iou=self.iou,
+                    device=self.device,
+                    verbose=False
+                )
+                if amb_res and len(amb_res) > 0 and amb_res[0].boxes is not None:
+                    for abox in amb_res[0].boxes:
+                        acls_id = int(abox.cls[0].item())
+                        aconf = float(abox.conf[0].item())
+                        axyxy = abox.xyxy[0].cpu().numpy().astype(int).tolist()
+                        alabel = "fire_truck" if acls_id == 1 else "ambulance"
+                        full_frame_amb_boxes.append((axyxy, alabel, aconf))
+            except Exception:
+                pass
+
         results = self.model.track(
             source=frame,
             persist=True,
@@ -260,46 +281,46 @@ class VehicleTracker:
                 self.speed_histories[track_id].append(raw_kmh)
                 instant_speed_kmh = float(np.mean(self.speed_histories[track_id]))
 
-            # Emergency Vehicle Detection: check ROI heuristic or use persisted cache
+            # Emergency Vehicle Detection: spatial fusion with full-frame neural boxes or cached track
             is_emergency = False
             emergency_type_val: Optional[str] = None
 
             if track_id in self.emergency_tracks:
-                # Already confirmed emergency in a previous frame — persist without re-checking every frame
+                # Already confirmed emergency in previous frames — persist without re-checking
                 is_emergency = True
                 emergency_type_val = self.emergency_tracks[track_id]
                 cls_name = "ambulance"
             elif cls_name in ("car", "truck", "bus"):
-                fh, fw = frame.shape[:2]
-                rx1, ry1 = max(0, sx1), max(0, sy1)
-                rx2, ry2 = min(fw, sx2), min(fh, sy2)
-                if (rx2 - rx1 >= 24) and (ry2 - ry1 >= 24):
-                    roi = frame[ry1:ry2, rx1:rx2]
-                    detected_emerg = False
-                    e_type = None
+                detected_emerg = False
+                e_type = None
 
-                    # If fine-tuned ambulance neural model is loaded, check ROI with calibrated confidence
-                    if self.ambulance_model_loaded and self.ambulance_model is not None:
-                        try:
-                            amb_pred = self.ambulance_model.predict(source=roi, conf=0.50, verbose=False)
-                            if amb_pred and len(amb_pred) > 0 and len(amb_pred[0].boxes) > 0:
-                                detected_emerg = True
-                                e_type = "ambulance"
-                        except Exception:
-                            pass
+                # Match with full-frame neural ambulance detections using spatial IoU
+                current_box = [sx1, sy1, sx2, sy2]
+                for abox, alabel, aconf in full_frame_amb_boxes:
+                    iou_val = YOLODetector._compute_iou(current_box, abox)
+                    if iou_val >= 0.35:
+                        detected_emerg = True
+                        e_type = alabel
+                        conf_val = max(conf_val, aconf)
+                        break
 
-                    # Fallback to heuristic classifier
-                    if not detected_emerg:
+                # Fallback to visual livery / beacon classifier if not detected by neural head
+                if not detected_emerg:
+                    fh, fw = frame.shape[:2]
+                    rx1, ry1 = max(0, sx1), max(0, sy1)
+                    rx2, ry2 = min(fw, sx2), min(fh, sy2)
+                    if (rx2 - rx1 >= 24) and (ry2 - ry1 >= 24):
+                        roi = frame[ry1:ry2, rx1:rx2]
                         detected_emerg, e_type = YOLODetector.classify_emergency_vehicle(roi, cls_name)
 
-                    if detected_emerg:
-                        self.emergency_hits[track_id] = self.emergency_hits.get(track_id, 0) + 1
-                        # Multi-frame confirmation across 2 frames to prevent transient video flicker
-                        if self.emergency_hits[track_id] >= 2:
-                            is_emergency = True
-                            emergency_type_val = e_type
-                            cls_name = "ambulance"
-                            self.emergency_tracks[track_id] = e_type or "ambulance"
+                if detected_emerg:
+                    self.emergency_hits[track_id] = self.emergency_hits.get(track_id, 0) + 1
+                    # Multi-frame confirmation across 2 frames to prevent transient video flicker
+                    if self.emergency_hits[track_id] >= 2:
+                        is_emergency = True
+                        emergency_type_val = e_type
+                        cls_name = "ambulance"
+                        self.emergency_tracks[track_id] = e_type or "ambulance"
 
             vehicle = TrackedVehicle(
                 track_id=track_id,
