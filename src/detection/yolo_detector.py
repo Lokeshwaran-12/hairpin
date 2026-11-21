@@ -242,58 +242,70 @@ class YOLODetector:
     def classify_emergency_vehicle(roi: np.ndarray, base_class: str = "car") -> Tuple[bool, Optional[str]]:
         """
         Visual heuristic classifier for ambulances and emergency response vehicles.
-        Analyzes:
-          1. Roof Lightbar/Beacon: Top 15-35% of the vehicle ROI for red/blue strobe signatures.
-          2. Livery & Body Pattern: High white reflectance body with high-contrast emergency red markings.
+        Rejects ordinary passenger cars (sedans, hatchbacks, coupes) and requires:
+          1. Geometry & Size: High-top van / box chassis (not low-profile passenger cars).
+          2. Concentrated Roof Lightbar: High saturation dual strobe (red & blue) on top 22% of roof.
+          3. Prominent White Livery with Emergency Accent: High white reflectance (>=40%) with emergency red marking (>=3.5%).
         """
         if roi is None or roi.size == 0:
             return False, None
 
         h, w = roi.shape[:2]
-        if h < 20 or w < 20:
+        # Ambulances are medium-to-large high-profile commercial vehicles
+        if h < 40 or w < 40:
             return False, None
 
-        # 1. Roof Beacon / Lightbar Inspection (Top 15% - 35% of vehicle)
-        roof_h = max(4, int(h * 0.28))
+        area = w * h
+        aspect_ratio = float(h) / float(w)
+
+        # Standard passenger cars (low-slung sedans, hatchbacks) are rejected unless large commercial footprint
+        if base_class == "car":
+            # If it's a small or low-profile car, it cannot be an ambulance
+            if area < 14000 or aspect_ratio < 0.60:
+                return False, None
+
+        # 1. Roof Beacon / Lightbar Inspection (Top 22% of vehicle)
+        roof_h = max(6, int(h * 0.22))
         roof_roi = roi[0:roof_h, :]
         hsv_roof = cv2.cvtColor(roof_roi, cv2.COLOR_BGR2HSV)
         roof_pixels = float(roof_roi.shape[0] * roof_roi.shape[1])
 
-        # Red beacons (hue wraps 0-10 and 165-180)
-        red_mask_1 = (hsv_roof[:, :, 0] <= 10) & (hsv_roof[:, :, 1] >= 80) & (hsv_roof[:, :, 2] >= 90)
-        red_mask_2 = (hsv_roof[:, :, 0] >= 165) & (hsv_roof[:, :, 1] >= 80) & (hsv_roof[:, :, 2] >= 90)
+        # Highly saturated red strobes (S >= 120, V >= 120) to reject dull paint/reflections
+        red_mask_1 = (hsv_roof[:, :, 0] <= 10) & (hsv_roof[:, :, 1] >= 120) & (hsv_roof[:, :, 2] >= 120)
+        red_mask_2 = (hsv_roof[:, :, 0] >= 168) & (hsv_roof[:, :, 1] >= 120) & (hsv_roof[:, :, 2] >= 120)
         red_beacon_px = int(np.count_nonzero(red_mask_1 | red_mask_2))
 
-        # Blue beacons (hue 100-135)
-        blue_mask = (hsv_roof[:, :, 0] >= 100) & (hsv_roof[:, :, 0] <= 135) & (hsv_roof[:, :, 1] >= 80) & (hsv_roof[:, :, 2] >= 90)
+        # Highly saturated blue strobes (hue 102-128, S >= 120, V >= 120) to reject sky / windshield tint
+        blue_mask = (hsv_roof[:, :, 0] >= 102) & (hsv_roof[:, :, 0] <= 128) & (hsv_roof[:, :, 1] >= 120) & (hsv_roof[:, :, 2] >= 120)
         blue_beacon_px = int(np.count_nonzero(blue_mask))
 
-        flasher_ratio = (red_beacon_px + blue_beacon_px) / roof_pixels
+        flasher_pixels = red_beacon_px + blue_beacon_px
+        flasher_ratio = flasher_pixels / roof_pixels
 
-        # 2. Body Livery & Marking Inspection (Middle/Lower 72% of vehicle)
+        # 2. Body Livery & Marking Inspection (Middle/Lower 78% of vehicle)
         body_roi = roi[roof_h:, :]
         body_pixels = float(body_roi.shape[0] * body_roi.shape[1])
         hsv_body = cv2.cvtColor(body_roi, cv2.COLOR_BGR2HSV)
 
-        # White / High-reflectance body base (low saturation, high value)
-        white_body_mask = (hsv_body[:, :, 1] <= 65) & (hsv_body[:, :, 2] >= 140)
+        # White / High-reflectance body base (low saturation S <= 50, high value V >= 160)
+        white_body_mask = (hsv_body[:, :, 1] <= 50) & (hsv_body[:, :, 2] >= 160)
         white_ratio = int(np.count_nonzero(white_body_mask)) / body_pixels
 
-        # Emergency red stripe / cross markings on body
-        red_body_mask = ((hsv_body[:, :, 0] <= 10) | (hsv_body[:, :, 0] >= 165)) & (hsv_body[:, :, 1] >= 90) & (hsv_body[:, :, 2] >= 80)
+        # Emergency red stripe / cross markings on body (S >= 110, V >= 90)
+        red_body_mask = ((hsv_body[:, :, 0] <= 10) | (hsv_body[:, :, 0] >= 168)) & (hsv_body[:, :, 1] >= 110) & (hsv_body[:, :, 2] >= 90)
         red_body_ratio = int(np.count_nonzero(red_body_mask)) / body_pixels
 
-        # Decision Logic:
-        # A. Roof lightbar with red + blue flashers on predominantly white body
-        has_dual_beacon = (red_beacon_px >= 3 and blue_beacon_px >= 3 and flasher_ratio >= 0.02)
-        # B. Single intense emergency flasher on roof + white body
-        has_strong_flasher = (flasher_ratio >= 0.04 and (red_beacon_px >= 6 or blue_beacon_px >= 6))
-        # C. Signature ambulance livery: high white body with emergency red markings
-        has_ambulance_livery = (white_ratio >= 0.30 and red_body_ratio >= 0.02)
+        # Decision Criteria (Strict to prevent false positives on white/colored cars):
+        # A. Dual flashing strobes (both red and blue >= 15px) on a predominantly white body (>= 35%)
+        has_dual_beacon = (red_beacon_px >= 15 and blue_beacon_px >= 15 and flasher_ratio >= 0.04 and white_ratio >= 0.35)
 
-        if (has_dual_beacon and white_ratio >= 0.15) or \
-           (has_strong_flasher and white_ratio >= 0.18) or \
-           (has_ambulance_livery and (flasher_ratio >= 0.015 or red_beacon_px >= 3 or blue_beacon_px >= 3)):
+        # B. High-intensity concentrated roof beacon pod (>= 35px) on prominent white body (>= 40%) with emergency markings
+        has_beacon_with_livery = (flasher_pixels >= 25 and flasher_ratio >= 0.05 and white_ratio >= 0.40 and red_body_ratio >= 0.03)
+
+        # C. Characteristic ambulance livery (high white >= 50% + clear red emergency stripes >= 4%) with roof flasher presence (>= 12px)
+        has_full_ambulance_livery = (white_ratio >= 0.50 and red_body_ratio >= 0.04 and flasher_pixels >= 12)
+
+        if has_dual_beacon or has_beacon_with_livery or has_full_ambulance_livery:
             return True, "ambulance"
 
         return False, None

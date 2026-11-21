@@ -129,6 +129,7 @@ class VehicleTracker:
         self._fallback_tracks: Dict[int, Tuple[int, int, int, int]] = {}
         # Emergency vehicle track cache: once confirmed ambulance, persist across frames
         self.emergency_tracks: Dict[int, str] = {}  # track_id -> emergency_type
+        self.emergency_hits: Dict[int, int] = {}    # track_id -> confirmation count
 
     def _match_or_create_fallback_id(self, x1: int, y1: int, x2: int, y2: int) -> int:
         """Associates unconfirmed detection with active fallback track or creates a new ID."""
@@ -292,10 +293,13 @@ class VehicleTracker:
                         detected_emerg, e_type = YOLODetector.classify_emergency_vehicle(roi, cls_name)
 
                     if detected_emerg:
-                        is_emergency = True
-                        emergency_type_val = e_type
-                        cls_name = "ambulance"
-                        self.emergency_tracks[track_id] = e_type or "ambulance"
+                        self.emergency_hits[track_id] = self.emergency_hits.get(track_id, 0) + 1
+                        # If detected by neural model OR confirmed across multiple frames
+                        if self.ambulance_model_loaded or self.emergency_hits[track_id] >= 2:
+                            is_emergency = True
+                            emergency_type_val = e_type
+                            cls_name = "ambulance"
+                            self.emergency_tracks[track_id] = e_type or "ambulance"
 
             vehicle = TrackedVehicle(
                 track_id=track_id,
