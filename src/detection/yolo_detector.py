@@ -53,6 +53,7 @@ class YOLODetector:
         ambulance_weights: Optional[str] = "models/yolov8n_ambulance.pt",
         enable_fine_tuned_ambulance: bool = True,
         confidence_threshold: float = 0.20,
+        ambulance_conf: float = 0.75,
         iou_threshold: float = 0.45,
         target_classes: Optional[List[int]] = None,
         device: str = "cpu"
@@ -61,6 +62,7 @@ class YOLODetector:
         self.ambulance_weights = ambulance_weights
         self.enable_fine_tuned_ambulance = enable_fine_tuned_ambulance
         self.confidence_threshold = confidence_threshold
+        self.ambulance_conf = ambulance_conf
         self.iou_threshold = iou_threshold
         self.target_classes = target_classes or list(self.COCO_VEHICLE_CLASSES.keys())
         self.device = device
@@ -171,7 +173,7 @@ class YOLODetector:
         if self.ambulance_model_loaded and self.ambulance_model is not None:
             amb_results = self.ambulance_model.predict(
                 source=frame,
-                conf=max(0.20, inference_conf),
+                conf=self.ambulance_conf,
                 iou=self.iou_threshold,
                 device=self.device,
                 verbose=False

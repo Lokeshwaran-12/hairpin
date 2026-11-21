@@ -61,6 +61,7 @@ detector_model = YOLODetector(
     ambulance_weights=model_cfg.get("ambulance_weights", "models/yolov8n_ambulance.pt"),
     enable_fine_tuned_ambulance=model_cfg.get("enable_fine_tuned_ambulance", True),
     confidence_threshold=model_cfg.get("confidence", 0.20),
+    ambulance_conf=model_cfg.get("ambulance_conf", 0.75),
     iou_threshold=model_cfg.get("iou_threshold", 0.45)
 )
 preprocessor = FramePreprocessor(enable_clahe=True)
