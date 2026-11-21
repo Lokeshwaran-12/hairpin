@@ -2,6 +2,7 @@
 Video Stream Ingestion supporting Video Files, Cameras, RTSP, and Synthetic Feeds.
 """
 import os
+import time
 import cv2
 import numpy as np
 from typing import Tuple, Union, Optional
@@ -57,6 +58,16 @@ class VideoStreamSource:
                 else:
                     self.cap = cv2.VideoCapture(self.source)
 
+        self.is_video_file = isinstance(self.source, str) and os.path.isfile(self.source) and not self.is_image
+        if self.is_video_file and self.cap and self.cap.isOpened():
+            self.video_fps = self.cap.get(cv2.CAP_PROP_FPS) or float(self.fps)
+            self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            self._playback_start_time = time.time()
+        else:
+            self.video_fps = float(self.fps)
+            self.total_frames = 0
+            self._playback_start_time = time.time()
+
     @property
     def is_opened(self) -> bool:
         if self.is_synthetic:
@@ -66,7 +77,10 @@ class VideoStreamSource:
         return self.cap.isOpened() if self.cap else False
 
     def read(self) -> Tuple[bool, Optional[np.ndarray]]:
-        """Reads next frame. Loops video files or repeats image upon request."""
+        """
+        Reads next frame.
+        For video files, synchronizes playback with wall-clock time to run at real-time 1.0x speed.
+        """
         if self.is_synthetic:
             return self.sim_feed.read()
 
@@ -78,10 +92,27 @@ class VideoStreamSource:
         if not self.cap or not self.cap.isOpened():
             return False, None
 
+        # Synchronize video files to real-time playback
+        if self.is_video_file and self.total_frames > 1 and self.video_fps > 0:
+            elapsed = time.time() - self._playback_start_time
+            target_frame = int(elapsed * self.video_fps) % self.total_frames
+            current_pos = int(self.cap.get(cv2.CAP_PROP_POS_FRAMES))
+
+            if target_frame > current_pos:
+                diff = target_frame - current_pos
+                if diff <= 8:
+                    for _ in range(diff - 1):
+                        self.cap.grab()
+                else:
+                    self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+            elif target_frame < current_pos and (current_pos - target_frame) > 10:
+                self.cap.set(cv2.CAP_PROP_POS_FRAMES, target_frame)
+
         ret, frame = self.cap.read()
         if not ret:
             # End of video file: automatically loop back for continuous monitoring
-            if isinstance(self.source, str) and os.path.isfile(self.source):
+            if self.is_video_file:
+                self._playback_start_time = time.time()
                 self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
                 ret, frame = self.cap.read()
 
@@ -94,6 +125,7 @@ class VideoStreamSource:
 
     def reset(self):
         """Resets stream to beginning."""
+        self._playback_start_time = time.time()
         if self.is_synthetic:
             self.sim_feed = HairpinSimulationFeed(width=self.target_width, height=self.target_height, fps=self.fps)
         elif self.cap and self.cap.isOpened():

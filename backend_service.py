@@ -283,7 +283,7 @@ class StreamManager:
             except Exception as e:
                 print(f"[Worker Error] Exception during frame processing: {e}")
 
-            time.sleep(0.03)  # ~30 FPS throttle
+            time.sleep(0.005)  # Responsive non-blocking cadence
 
 stream_manager = StreamManager()
 
@@ -535,17 +535,17 @@ def get_sample_info():
 
 @app.get("/api/stream/feed")
 def stream_feed():
-    """MJPEG live video stream endpoint."""
+    """MJPEG live video stream endpoint with fast encoding and smooth delivery."""
     stream_manager.start_if_needed()
     def _generator():
         while True:
             frame = stream_manager.current_frame
             if frame is not None:
-                ret, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+                ret, jpeg = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 75])
                 if ret:
                     yield (b"--frame\r\n"
                            b"Content-Type: image/jpeg\r\n\r\n" + jpeg.tobytes() + b"\r\n\r\n")
-            time.sleep(0.035)
+            time.sleep(0.02)
 
     return StreamingResponse(_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
 

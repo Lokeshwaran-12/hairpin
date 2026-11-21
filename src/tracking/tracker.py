@@ -82,11 +82,15 @@ class VehicleTracker:
         target_classes: Optional[List[int]] = None,
         device: str = "cpu",
         ambulance_weights: Optional[str] = "models/yolov8n_ambulance.pt",
-        enable_fine_tuned_ambulance: bool = True
+        enable_fine_tuned_ambulance: bool = True,
+        imgsz: int = 480
     ):
         self.model = YOLO(model_path)
         self.ambulance_weights = ambulance_weights
         self.enable_fine_tuned_ambulance = enable_fine_tuned_ambulance
+        self.imgsz = imgsz
+        self.frame_idx = 0
+        self._last_amb_boxes: List[Tuple[List[int], str, float]] = []
         self.ambulance_model = None
         self.ambulance_model_loaded = False
 
@@ -161,29 +165,37 @@ class VehicleTracker:
         if frame is None:
             return []
 
-        # 1. Full-Frame Fine-Tuned Ambulance Detection (runs once per frame on full frame)
+        self.frame_idx += 1
+
+        # 1. Full-Frame Fine-Tuned Ambulance Detection (cadence optimization for smooth real-time video)
         full_frame_amb_boxes: List[Tuple[List[int], str, float]] = []
         if self.ambulance_model_loaded and self.ambulance_model is not None:
-            try:
-                amb_res = self.ambulance_model.predict(
-                    source=frame,
-                    conf=0.50,
-                    iou=self.iou,
-                    device=self.device,
-                    verbose=False
-                )
-                if amb_res and len(amb_res) > 0 and amb_res[0].boxes is not None:
-                    for abox in amb_res[0].boxes:
-                        acls_id = int(abox.cls[0].item())
-                        aconf = float(abox.conf[0].item())
-                        axyxy = abox.xyxy[0].cpu().numpy().astype(int).tolist()
-                        alabel = "fire_truck" if acls_id == 1 else "ambulance"
-                        full_frame_amb_boxes.append((axyxy, alabel, aconf))
-            except Exception:
-                pass
+            if (self.frame_idx % 2 == 1) or not self._last_amb_boxes:
+                try:
+                    amb_res = self.ambulance_model.predict(
+                        source=frame,
+                        imgsz=self.imgsz,
+                        conf=0.50,
+                        iou=self.iou,
+                        device=self.device,
+                        verbose=False
+                    )
+                    if amb_res and len(amb_res) > 0 and amb_res[0].boxes is not None:
+                        boxes_out = []
+                        for abox in amb_res[0].boxes:
+                            acls_id = int(abox.cls[0].item())
+                            aconf = float(abox.conf[0].item())
+                            axyxy = abox.xyxy[0].cpu().numpy().astype(int).tolist()
+                            alabel = "fire_truck" if acls_id == 1 else "ambulance"
+                            boxes_out.append((axyxy, alabel, aconf))
+                        self._last_amb_boxes = boxes_out
+                except Exception:
+                    pass
+            full_frame_amb_boxes = list(self._last_amb_boxes)
 
         results = self.model.track(
             source=frame,
+            imgsz=self.imgsz,
             persist=True,
             tracker=self.tracker_type,
             conf=self.conf,
