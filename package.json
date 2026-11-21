@@ -7,7 +7,8 @@
     "start": "node server.js",
     "server": "node server.js",
     "backend": "python backend_service.py",
-    "test": "pytest tests/ -v"
+    "test": "pytest tests/ -v",
+    "clean": "python scripts/clean_cache.py"
   },
   "dependencies": {
     "cors": "^2.8.5",

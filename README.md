@@ -69,27 +69,34 @@ flowchart TD
 ```
 hairpin_detection/
 ├── config/
-│   └── config.yaml                     # Zone polygons, TTC thresholds, detection parameters
+│   └── config.yaml                     # Spatial zones, TTC thresholds & detection parameters
 ├── data/
+│   ├── datasets/                       # Model training datasets (e.g. Ambulance dataset)
 │   ├── sample_videos/                  # Sample test images and synthetic videos
-│   ├── snapshots/                      # Incident snapshot archives
+│   ├── snapshots/                      # Incident & emergency snapshot archives
 │   ├── uploaded_videos/                # User uploaded video storage
-│   └── logs/                           # SQLite database & CSV logs
+│   └── logs/                           # SQLite database (hairpin_events.db) & CSV logs
 ├── public/                             # Frontend web dashboard (HTML5, CSS3, ES6)
 │   ├── index.html                      # Single-page dashboard UI
 │   ├── style.css                       # High-contrast stylesheet & animations
 │   └── app.js                          # Real-time telemetry, upload & WebSocket/polling
+├── scripts/                            # Automation, verification & utility scripts
+│   ├── start_system.bat                # Windows launcher starting backend and frontend
+│   ├── clean_cache.py                  # Cache & transient bytecode cleaner
+│   └── test_real_traffic.py            # Pipeline integration test script
 ├── src/                                # Core Python AI modules
 │   ├── capture/video_stream.py         # Video ingestion & looping
-│   ├── detection/yolo_detector.py      # YOLOv8n detector with heavy vehicle promotion
-│   ├── tracking/tracker.py             # ByteTrack tracker with low-threshold profile
-│   ├── risk_assessment/collision_predictor.py # TTC conflict prediction engine
-│   ├── warning/visualizer.py           # HUD renderer, centric line & alert styling
-│   ├── logging_storage/event_logger.py # SQLite & CSV persistence
+│   ├── detection/yolo_detector.py      # YOLOv8n detector with emergency vehicle classification
+│   ├── tracking/tracker.py             # ByteTrack tracker with emergency persistence cache
+│   ├── risk_assessment/collision_predictor.py # TTC conflict prediction & corridor clearance lock
+│   ├── warning/alert_system.py         # Acoustic priority sirens & hardware alarms
+│   ├── warning/visualizer.py           # HUD renderer, centric line & preemption banners
+│   ├── logging_storage/event_logger.py # SQLite & CSV persistence with emergency archival
 │   ├── preprocessing/preprocessor.py   # CLAHE contrast filter
 │   └── utils/synthetic_feed.py         # Procedural simulation generator
-├── tests/                              # Automated test suite (21 unit & integration tests)
+├── tests/                              # Automated test suite (46 unit & integration tests)
 ├── backend_service.py                  # FastAPI Python AI backend (:8000)
+├── main_cli.py                         # Standalone CLI runner with OpenCV display
 ├── server.js                           # Node.js Express Gateway server (:3000)
 ├── package.json                        # Node dependencies & scripts
 ├── requirements.txt                    # Python dependencies

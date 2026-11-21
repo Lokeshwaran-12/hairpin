@@ -25,20 +25,22 @@ pnpm-debug.log*
 *.onnx
 *.engine
 
-# Dynamic Runtime Data & Large Video Files
+# Dynamic Runtime Data, Datasets & Large Video Files
+data/datasets/
 data/uploaded_videos/
-data/snapshots/incident_*.jpg
-data/snapshots/*.png
+data/snapshots/*
+!data/snapshots/.gitkeep
 data/logs/*.db
 data/logs/*.csv
 data/sample_videos/*.mp4
 
-# Preserve tracked samples
+# Preserve tracked samples & directory structures
 !data/sample_videos/images.jpeg
 !data/sample_videos/images (1).jpeg
 !data/logs/.gitkeep
 !data/snapshots/.gitkeep
 !data/sample_videos/.gitkeep
+!data/datasets/.gitkeep
 
 # IDEs & System files
 .vscode/
