@@ -128,15 +128,13 @@ class YOLODetector:
         if frame is None:
             return []
 
-        # Use lower sensitivity floor for inference so heavy commercial vehicles aren't discarded prematurely
-        inference_conf = min(0.18, self.confidence_threshold)
-
         results = self.model.predict(
             source=frame,
-            conf=inference_conf,
+            conf=self.confidence_threshold,
             iou=self.iou_threshold,
             classes=self.target_classes,
             device=self.device,
+            agnostic_nms=True,
             verbose=False
         )
 
@@ -154,9 +152,7 @@ class YOLODetector:
                 xyxy = box.xyxy[0].cpu().numpy().astype(int)
                 x1, y1, x2, y2 = xyxy.tolist()
 
-                # Heavy vehicles (truck / bus / hauler) are retained down to inference_conf
-                is_heavy_class = cls_id in (5, 6, 7)
-                if not is_heavy_class and conf < self.confidence_threshold:
+                if conf < self.confidence_threshold:
                     continue
 
                 cx = int((x1 + x2) / 2.0)
@@ -165,10 +161,6 @@ class YOLODetector:
                 h = y2 - y1
 
                 class_name = self.COCO_VEHICLE_CLASSES.get(cls_id, self.model.names.get(cls_id, f"cls_{cls_id}"))
-
-                # Large footprint promotion for heavy vehicles (tall trucks/buses, not flat wide cars)
-                if class_name == "car" and (w * h >= 22000) and (h >= 115) and ((h / float(w)) >= 0.55):
-                    class_name = "truck"
 
                 # Direct check if class itself is already emergency
                 is_emergency = class_name in ("ambulance", "police", "firetruck")
@@ -281,7 +273,9 @@ class YOLODetector:
                     fh, fw = frame.shape[:2]
                     rx1, ry1 = max(0, x1), max(0, y1)
                     rx2, ry2 = min(fw, x2), min(fh, y2)
-                    if (rx2 - rx1 >= 24) and (ry2 - ry1 >= 24):
+                    rw = rx2 - rx1
+                    rh = ry2 - ry1
+                    if rw >= 35 and rh >= 35 and (rw * rh >= 2000):
                         roi = frame[ry1:ry2, rx1:rx2]
                         is_emerg, e_type = self.classify_emergency_vehicle(roi, det.class_name)
                         if is_emerg:
@@ -289,22 +283,54 @@ class YOLODetector:
                             det.emergency_type = e_type
                             det.class_name = "ambulance"
 
+        # ------------------------------------------------------------------ #
+        # Step 4: Overlapping Duplicate Emergency Vehicle Suppression        #
+        # Suppresses partial vehicle boxes (e.g. cab or bumper fragments)   #
+        # when a primary full-vehicle bounding box covers the ambulance.     #
+        # ------------------------------------------------------------------ #
+        emerg_indices = [i for i, d in enumerate(detections) if d.is_emergency]
+        if len(emerg_indices) > 1:
+            suppressed = set()
+            # Prioritize largest bounding box area covering the vehicle
+            emerg_indices.sort(key=lambda idx: detections[idx].width * detections[idx].height, reverse=True)
+            for i in range(len(emerg_indices)):
+                idx1 = emerg_indices[i]
+                if idx1 in suppressed:
+                    continue
+                d1 = detections[idx1]
+                for j in range(i + 1, len(emerg_indices)):
+                    idx2 = emerg_indices[j]
+                    if idx2 in suppressed:
+                        continue
+                    d2 = detections[idx2]
+                    iou_val = self._compute_iou(d1.box, d2.box)
+                    overlap_val = self._compute_overlap_ratio(d1.box, d2.box)
+                    if iou_val >= 0.20 or overlap_val >= 0.35:
+                        suppressed.add(idx2)
+                        d2.is_emergency = False
+                        d2.emergency_type = None
+                        d2.class_name = "car"
+
         return detections
 
     @staticmethod
     def classify_emergency_vehicle(roi: np.ndarray, base_class: str = "car") -> Tuple[bool, Optional[str]]:
         """
         Visual emergency classifier for ambulances and emergency response vehicles.
-        Rejects ordinary civilian passenger cars (sedans, SUVs, hatchbacks) and requires:
-          1. Genuine Red Beacon / Strobe on roof (top 22%): red_beacon_px >= 8
-          2. Dual Red & Blue Strobes: red_beacon_px >= 4 and blue_beacon_px >= 10
-          3. Prominent Red Emergency Markings / Cross on white body: red_body_ratio >= 0.020 and white_ratio >= 0.30
+        Rejects ordinary civilian passenger cars (sedans, SUVs, hatchbacks, tail lights) and requires:
+          1. Physical vehicle geometry: width >= 35, height >= 35, area >= 2000 px, aspect ratio 0.38 <= h/w <= 2.0
+          2. Dual Red & Blue Lightbar: red_beacon_px >= 18, blue_beacon_px >= 18, center_strobe_px >= 15
+          3. Prominent Red Emergency Markings / Cross on white body with centered roof strobe
         """
         if roi is None or roi.size == 0:
             return False, None
 
         h, w = roi.shape[:2]
-        if h < 24 or w < 24:
+        if h < 35 or w < 35 or (w * h < 2000):
+            return False, None
+
+        aspect_ratio = h / float(w)
+        if aspect_ratio < 0.38 or aspect_ratio > 2.0:
             return False, None
 
         # 1. Roof Beacon / Lightbar Inspection (Top 22% of vehicle)
@@ -315,16 +341,29 @@ class YOLODetector:
         # Highly saturated red strobes (S >= 110, V >= 110)
         red_mask_1 = (hsv_roof[:, :, 0] <= 10) & (hsv_roof[:, :, 1] >= 110) & (hsv_roof[:, :, 2] >= 110)
         red_mask_2 = (hsv_roof[:, :, 0] >= 168) & (hsv_roof[:, :, 1] >= 110) & (hsv_roof[:, :, 2] >= 110)
-        red_beacon_px = int(np.count_nonzero(red_mask_1 | red_mask_2))
+        red_roof_mask = red_mask_1 | red_mask_2
+        red_beacon_px = int(np.count_nonzero(red_roof_mask))
 
         # Highly saturated blue strobes (hue 102-128, S >= 110, V >= 110)
         blue_mask = (hsv_roof[:, :, 0] >= 102) & (hsv_roof[:, :, 0] <= 128) & (hsv_roof[:, :, 1] >= 110) & (hsv_roof[:, :, 2] >= 110)
         blue_beacon_px = int(np.count_nonzero(blue_mask))
 
+        # Center localization: roof lightbars are mounted in the central 70% of vehicle width (15% to 85%)
+        # Tail lights and brake lights of preceding cars are located at the outer edges
+        strobe_mask = red_roof_mask | blue_mask
+        ys, xs = np.where(strobe_mask)
+        if len(xs) > 0:
+            xs_norm = xs / float(w)
+            center_strobe_px = int(np.count_nonzero((xs_norm >= 0.15) & (xs_norm <= 0.85)))
+        else:
+            center_strobe_px = 0
+
         # 2. Body Livery & Marking Inspection (Middle vehicle body)
         ground_cut = max(roof_h + 1, int(h * 0.88))
         body_roi = roi[roof_h:ground_cut, :]
         body_pixels = float(body_roi.shape[0] * body_roi.shape[1])
+        if body_pixels <= 0:
+            return False, None
         hsv_body = cv2.cvtColor(body_roi, cv2.COLOR_BGR2HSV)
 
         # White / High-reflectance body base (low saturation S <= 50, high value V >= 160)
@@ -335,15 +374,31 @@ class YOLODetector:
         red_body_mask = ((hsv_body[:, :, 0] <= 10) | (hsv_body[:, :, 0] >= 168)) & (hsv_body[:, :, 1] >= 110) & (hsv_body[:, :, 2] >= 90)
         red_body_ratio = int(np.count_nonzero(red_body_mask)) / body_pixels
 
-        # Genuine emergency criteria:
-        # 1. Dedicated red beacon (>= 10px on roof)
-        # 2. Dual red + blue lightbar (red >= 10 and blue >= 12)
-        # 3. Emergency livery with roof beacon presence (white >= 0.24, red livery >= 0.015, red beacon >= 10)
-        has_dedicated_red_beacon = (red_beacon_px >= 10)
-        has_dual_beacon = (red_beacon_px >= 10 and blue_beacon_px >= 12)
-        has_livery_with_beacon = (white_ratio >= 0.24 and red_body_ratio >= 0.015 and red_beacon_px >= 10)
+        # Civilian Red Car Rejection:
+        # A civilian red car has predominantly red paint (>= 22% red body) and very little white (< 20% white)
+        is_red_painted_vehicle = (red_body_ratio >= 0.22 and white_ratio < 0.20) or (red_body_ratio >= 0.35)
 
-        if has_dedicated_red_beacon or has_dual_beacon or has_livery_with_beacon:
+        # Genuine emergency criteria:
+        # 1. Dual red + blue lightbar (both red >= 18 and blue >= 18) on a predominantly light/white vehicle
+        has_dual_beacon = (
+            not is_red_painted_vehicle
+            and red_beacon_px >= 18
+            and blue_beacon_px >= 18
+            and center_strobe_px >= 15
+            and white_ratio >= 0.18
+        )
+
+        # 2. Characteristic ambulance livery (predominantly white body >= 28% + red emergency stripe/cross 3.5%-20% + centered roof strobe >= 20)
+        has_livery_with_beacon = (
+            not is_red_painted_vehicle
+            and white_ratio >= 0.28
+            and (0.035 <= red_body_ratio <= 0.20)
+            and red_beacon_px >= 25
+            and center_strobe_px >= 20
+            and w >= 50 and h >= 50
+        )
+
+        if has_dual_beacon or has_livery_with_beacon:
             return True, "ambulance"
 
         return False, None

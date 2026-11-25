@@ -243,11 +243,6 @@ class VehicleTracker:
             area_box = w_box * h_box
             is_heavy = (cls_name in ["truck", "bus"])
 
-            # Heavy Vehicle Promotion: Large footprint tall commercial vehicles on mountain curves (not flat sedans)
-            if not is_heavy and area_box >= 22000 and h_box >= 115 and (h_box / float(w_box)) >= 0.55:
-                cls_name = "truck"
-                is_heavy = True
-
             # Smooth bounding box across recent frames to eliminate flicker
             if track_id not in self.box_histories:
                 self.box_histories[track_id] = deque(maxlen=4)
@@ -335,7 +330,9 @@ class VehicleTracker:
                     fh, fw = frame.shape[:2]
                     rx1, ry1 = max(0, sx1), max(0, sy1)
                     rx2, ry2 = min(fw, sx2), min(fh, sy2)
-                    if (rx2 - rx1 >= 24) and (ry2 - ry1 >= 24):
+                    rw = rx2 - rx1
+                    rh = ry2 - ry1
+                    if rw >= 35 and rh >= 35 and (rw * rh >= 2000):
                         roi = frame[ry1:ry2, rx1:rx2]
                         detected_emerg, e_type = YOLODetector.classify_emergency_vehicle(roi, cls_name)
 
@@ -347,6 +344,20 @@ class VehicleTracker:
                         emergency_type_val = e_type
                         cls_name = "ambulance"
                         self.emergency_tracks[track_id] = e_type or "ambulance"
+
+                # Overlap suppression: do not tag as emergency if an existing emergency vehicle already covers this area
+                if is_emergency:
+                    for prev_v in tracked_objects:
+                        if prev_v.is_emergency:
+                            iou_val = YOLODetector._compute_iou(prev_v.box, [sx1, sy1, sx2, sy2])
+                            ov_val = YOLODetector._compute_overlap_ratio(prev_v.box, [sx1, sy1, sx2, sy2])
+                            if iou_val >= 0.20 or ov_val >= 0.35:
+                                is_emergency = False
+                                emergency_type_val = None
+                                cls_name = "car"
+                                if track_id in self.emergency_tracks:
+                                    del self.emergency_tracks[track_id]
+                                break
 
             vehicle = TrackedVehicle(
                 track_id=track_id,

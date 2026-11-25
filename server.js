@@ -189,14 +189,16 @@ let isPythonReady = false;
 function getPythonCommand() {
     if (process.env.PYTHON) return process.env.PYTHON;
     const candidates = [
-        'C:\\Program Files\\Python311\\python.exe',
-        'python',
-        'python3'
+        path.join(__dirname, '.venv', 'bin', 'python'),
+        path.join(__dirname, '.venv', 'Scripts', 'python.exe'),
+        path.join(__dirname, 'venv', 'bin', 'python'),
+        path.join(__dirname, 'venv', 'Scripts', 'python.exe'),
+        'C:\\Program Files\\Python311\\python.exe'
     ];
     for (const cand of candidates) {
-        if (cand.includes('\\') && fs.existsSync(cand)) return cand;
+        if (fs.existsSync(cand)) return cand;
     }
-    return 'python';
+    return process.platform === 'win32' ? 'python' : 'python3';
 }
 
 function checkPythonHealth() {
